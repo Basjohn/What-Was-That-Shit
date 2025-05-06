@@ -17,8 +17,6 @@ A configurable overlay and history saver for all images you may deal with, inclu
 ## Requirements
 
 - Windows OS
-- Python 3.9+
-- Dependencies listed in requirements.txt
 - There are Linux build scripts but fuck me if I would know if they work or not. Fuck you too, but in a nicer way.
 
 ## Installation
