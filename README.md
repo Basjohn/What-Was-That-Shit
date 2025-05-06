@@ -19,6 +19,7 @@ A configurable overlay and history saver for all images you may deal with, inclu
 
 - Windows OS
 - There are Linux build scripts but fuck me if I would know if they work or not. Fuck you too, but in a nicer way.
+- I may be lonely and reaching out through git.
 
 ## Installation
 
