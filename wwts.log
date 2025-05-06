@@ -1,0 +1,118 @@
+2025-05-06 22:13:12,082 - root - INFO - Logger initialized
+2025-05-06 22:13:12,083 - root - INFO - Using history folder: F:\Programming\Github-Friendly\WWTS\History
+2025-05-06 22:13:12,083 - root - INFO - Using history folder: F:\Programming\Github-Friendly\WWTS\History
+2025-05-06 22:13:12,098 - root - INFO - Applying theme: dark
+2025-05-06 22:13:12,324 - root - INFO - System tray icon initialized
+2025-05-06 22:13:12,414 - root - INFO - Shift key monitoring set up successfully
+2025-05-06 22:13:12,414 - root - INFO - Applying settings to overlay
+2025-05-06 22:13:12,414 - root - INFO - ClipboardMonitor initialized with settings applied
+2025-05-06 22:13:12,415 - root - INFO - Clipboard monitor started
+2025-05-06 22:13:12,415 - root - INFO - Clipboard monitoring started
+2025-05-06 22:13:13,946 - root - INFO - Double Shift detected, capturing image
+2025-05-06 22:13:13,948 - root - INFO - Double-shift capture requested at window class: Chrome_RenderWidgetHostHWND
+2025-05-06 22:13:13,948 - root - INFO - Starting screen area capture
+2025-05-06 22:13:13,982 - root - INFO - Captured screenshot with size: (700, 400)
+2025-05-06 22:13:13,982 - root - INFO - Converted screenshot to RGB
+2025-05-06 22:13:13,983 - root - INFO - Converted to QImage, size: PyQt5.QtCore.QSize(700, 400)
+2025-05-06 22:13:13,983 - root - INFO - Successfully captured screen area
+2025-05-06 22:13:13,983 - root - INFO - Successfully captured screen area
+2025-05-06 22:13:13,983 - root - ERROR - Error converting PIL image to QImage: 'QImage' object has no attribute 'mode'
+2025-05-06 22:13:42,962 - root - INFO - New clipboard image detected
+2025-05-06 22:13:42,972 - root - INFO - Saved image to history: F:\Programming\Github-Friendly\WWTS\History\2025\05\jpeg\AA9A.jpeg
+2025-05-06 22:13:42,972 - root - INFO - Image saved to history: F:\Programming\Github-Friendly\WWTS\History\2025\05\jpeg\AA9A.jpeg
+2025-05-06 22:13:42,972 - root - INFO - Setting new image to overlay
+2025-05-06 22:13:42,975 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:42,993 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:44,067 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:44,079 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:44,098 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:44,110 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:44,130 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:44,146 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:44,495 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:44,511 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:44,541 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:44,555 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:44,619 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:44,632 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:44,898 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:44,910 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:44,928 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:44,941 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:44,959 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:44,972 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:45,026 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:45,044 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:45,131 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:45,144 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:45,165 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:45,177 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:45,200 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:45,213 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:47,042 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:47,054 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:47,081 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:47,096 - root - INFO - Converted image from mode RGBA to RGBA
+2025-05-06 22:13:59,464 - root - INFO - Clipboard monitor stopped
+2025-05-06 22:15:31,375 - root - INFO - Logger initialized
+2025-05-06 22:15:31,376 - root - INFO - Using history folder: F:\Programming\Github-Friendly\WWTS\History
+2025-05-06 22:15:31,376 - root - INFO - Using history folder: F:\Programming\Github-Friendly\WWTS\History
+2025-05-06 22:15:31,392 - root - INFO - Applying theme: dark
+2025-05-06 22:15:31,613 - root - INFO - System tray icon initialized
+2025-05-06 22:15:31,684 - root - INFO - Shift key monitoring set up successfully
+2025-05-06 22:15:31,685 - root - INFO - Clipboard monitor started
+2025-05-06 22:15:31,685 - root - INFO - Clipboard monitoring started
+2025-05-06 22:15:31,838 - root - INFO - New clipboard image detected
+2025-05-06 22:15:31,849 - root - INFO - Saved image to history: F:\Programming\Github-Friendly\WWTS\History\2025\05\jpeg\AA0F.jpeg
+2025-05-06 22:15:31,849 - root - INFO - Image saved to history: F:\Programming\Github-Friendly\WWTS\History\2025\05\jpeg\AA0F.jpeg
+2025-05-06 22:15:31,849 - root - INFO - Setting new image to overlay
+2025-05-06 22:15:37,366 - root - INFO - Double Shift detected, capturing image
+2025-05-06 22:15:37,368 - root - INFO - Double-shift capture requested at window class: Chrome_RenderWidgetHostHWND
+2025-05-06 22:15:37,404 - root - INFO - Successfully captured screen area
+2025-05-06 22:15:37,406 - root - INFO - Emitting image_captured signal
+2025-05-06 22:15:37,406 - root - INFO - Received direct capture image
+2025-05-06 22:15:38,900 - root - INFO - Double Shift detected, capturing image
+2025-05-06 22:15:38,902 - root - INFO - Double-shift capture requested at window class: Chrome_RenderWidgetHostHWND
+2025-05-06 22:15:38,936 - root - INFO - Successfully captured screen area
+2025-05-06 22:15:38,937 - root - INFO - Emitting image_captured signal
+2025-05-06 22:15:38,938 - root - INFO - Received direct capture image
+2025-05-06 22:15:42,106 - root - INFO - Double Shift detected, capturing image
+2025-05-06 22:15:42,108 - root - INFO - Double-shift capture requested at window class: Chrome_RenderWidgetHostHWND
+2025-05-06 22:15:42,144 - root - INFO - Successfully captured screen area
+2025-05-06 22:15:42,145 - root - INFO - Emitting image_captured signal
+2025-05-06 22:15:42,146 - root - INFO - Received direct capture image
+2025-05-06 22:17:27,036 - root - INFO - Logger initialized
+2025-05-06 22:17:27,037 - root - INFO - Using history folder: F:\Programming\Github-Friendly\WWTS\History
+2025-05-06 22:17:27,037 - root - INFO - Using history folder: F:\Programming\Github-Friendly\WWTS\History
+2025-05-06 22:17:27,053 - root - INFO - Applying theme: dark
+2025-05-06 22:17:27,275 - root - INFO - System tray icon initialized
+2025-05-06 22:17:27,345 - root - INFO - Shift key monitoring set up successfully
+2025-05-06 22:17:27,346 - root - INFO - Clipboard monitor started
+2025-05-06 22:17:27,346 - root - INFO - Clipboard monitoring started
+2025-05-06 22:17:27,489 - root - INFO - New clipboard image detected
+2025-05-06 22:17:27,501 - root - INFO - Saved image to history: F:\Programming\Github-Friendly\WWTS\History\2025\05\jpeg\A9BB.jpeg
+2025-05-06 22:17:27,501 - root - INFO - Image saved to history: F:\Programming\Github-Friendly\WWTS\History\2025\05\jpeg\A9BB.jpeg
+2025-05-06 22:17:27,501 - root - INFO - Setting new image to overlay
+2025-05-06 22:17:35,990 - root - INFO - Double Shift detected, capturing image
+2025-05-06 22:17:35,992 - root - INFO - Double-shift capture requested at window class: Chrome_RenderWidgetHostHWND
+2025-05-06 22:17:36,034 - root - INFO - Successfully captured screen area
+2025-05-06 22:17:36,036 - root - INFO - Emitting image_captured signal
+2025-05-06 22:17:36,036 - root - INFO - Received direct capture image
+2025-05-06 22:20:21,222 - root - INFO - Logger initialized
+2025-05-06 22:20:21,223 - root - INFO - Using history folder: F:\Programming\Github-Friendly\WWTS\History
+2025-05-06 22:20:21,224 - root - INFO - Using history folder: F:\Programming\Github-Friendly\WWTS\History
+2025-05-06 22:20:21,240 - root - INFO - Applying theme: dark
+2025-05-06 22:20:21,462 - root - INFO - System tray icon initialized
+2025-05-06 22:20:21,533 - root - INFO - Shift key monitoring set up successfully
+2025-05-06 22:20:21,534 - root - INFO - Clipboard monitor started
+2025-05-06 22:20:21,534 - root - INFO - Clipboard monitoring started
+2025-05-06 22:20:21,678 - root - INFO - New clipboard image detected
+2025-05-06 22:20:21,688 - root - INFO - Saved image to history: F:\Programming\Github-Friendly\WWTS\History\2025\05\jpeg\A8E9.jpeg
+2025-05-06 22:20:21,688 - root - INFO - Image saved to history: F:\Programming\Github-Friendly\WWTS\History\2025\05\jpeg\A8E9.jpeg
+2025-05-06 22:20:21,689 - root - INFO - Setting new image to overlay
+2025-05-06 22:20:24,586 - root - INFO - Double Shift detected, capturing image
+2025-05-06 22:20:24,588 - root - INFO - Double-shift capture requested at window class: Chrome_RenderWidgetHostHWND
+2025-05-06 22:20:24,622 - root - INFO - Successfully captured screen area
+2025-05-06 22:20:24,623 - root - INFO - Emitting image_captured signal
+2025-05-06 22:20:24,624 - root - INFO - Received direct capture image
+2025-05-06 22:20:48,313 - root - INFO - Clipboard monitor stopped

@@ -1,0 +1,16 @@
+{
+    "opacity": 80,
+    "theme": "dark",
+    "auto_hide": true,
+    "clickthrough": false,
+    "always_on_top": true,
+    "show_pin_button": true,
+    "pin_to_corner": "None",
+    "use_custom_pin_position": false,
+    "enable_middle_click": true,
+    "double_shift_capture": true,
+    "scroll_wheel_resize": true,
+    "save_history": true,
+    "capture_height": 400,
+    "capture_width": 500
+}

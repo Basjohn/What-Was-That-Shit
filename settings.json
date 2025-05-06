@@ -1,0 +1,28 @@
+{
+    "always_on_top": false,
+    "clickthrough": false,
+    "auto_refresh": true,
+    "minimize_on_startup": false,
+    "resize_image_to_fit": true,
+    "save_history": true,
+    "opacity": 78,
+    "theme": "dark",
+    "monitor_print_screen": true,
+    "monitor_ctrl_c": true,
+    "overlay_width": 450,
+    "overlay_height": 450,
+    "overlay_x": 283,
+    "overlay_y": 323,
+    "resize_frame_to_image": false,
+    "last_snapped_to": [
+        "center",
+        0
+    ],
+    "history_folder": "C:\\Users\\Basjohn\\CascadeProjects\\WWTSVKAI\\history",
+    "overlay_position_x": 1668,
+    "overlay_position_y": 1042,
+    "scroll_wheel_resize": true,
+    "double_shift_capture": true,
+    "capture_height": 400,
+    "capture_width": 700
+}

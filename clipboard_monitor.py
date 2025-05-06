@@ -1,0 +1,678 @@
+import logging
+import os
+import re
+import time
+import threading
+import io
+import struct
+import ctypes
+from ctypes import wintypes
+from urllib.request import urlopen, Request
+from pathlib import Path
+
+import keyboard
+import win32clipboard
+import win32con
+from PIL import Image, ImageGrab
+from PyQt5.QtCore import QObject, pyqtSignal, QTimer
+from PyQt5.QtGui import QImage
+from PyQt5.QtWidgets import QApplication
+
+# Define necessary structures for Windows API calls
+class POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+class MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ("dx", wintypes.LONG),
+        ("dy", wintypes.LONG),
+        ("mouseData", wintypes.DWORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG))
+    ]
+
+class KEYBDINPUT(ctypes.Structure):
+    _fields_ = [
+        ("wVk", wintypes.WORD),
+        ("wScan", wintypes.WORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG))
+    ]
+
+class HARDWAREINPUT(ctypes.Structure):
+    _fields_ = [
+        ("uMsg", wintypes.DWORD),
+        ("wParamL", wintypes.WORD),
+        ("wParamH", wintypes.WORD)
+    ]
+
+class INPUT_UNION(ctypes.Union):
+    _fields_ = [
+        ("mi", MOUSEINPUT),
+        ("ki", KEYBDINPUT),
+        ("hi", HARDWAREINPUT)
+    ]
+
+class INPUT(ctypes.Structure):
+    _fields_ = [
+        ("type", wintypes.DWORD),
+        ("union", INPUT_UNION)
+    ]
+
+class ClipboardMonitor(QObject):
+    """Monitors the clipboard for images and signals when one is found."""
+    
+    # Signal emitted when an image is captured from the clipboard
+    new_image = pyqtSignal(object)
+    image_captured = pyqtSignal(object)
+    
+    def __init__(self, settings):
+        super().__init__()
+        self.settings = settings
+        self.running = False
+        self.monitor_thread = None
+        self.last_image_hash = None
+        self.last_web_url = None
+        
+        # Shift press tracking for double-shift feature
+        self.shift_press_times = []
+        self.shift_press_threshold = 0.3  # 300ms
+        self.shift_released = True  # Track if shift was released since last press
+        self.setup_shift_monitoring()
+        
+    def start(self):
+        """Start monitoring the clipboard for images"""
+        if self.running:
+            return
+            
+        self.running = True
+        self.monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
+        self.monitor_thread.start()
+        logging.info("Clipboard monitor started")
+        
+    def stop(self):
+        """Stop monitoring the clipboard"""
+        self.running = False
+        if self.monitor_thread and self.monitor_thread.is_alive():
+            self.monitor_thread.join(timeout=1.0)
+            
+        # Unregister keyboard hooks to prevent memory leaks
+        try:
+            keyboard.unhook_all()
+        except Exception as e:
+            logging.error(f"Error unhooking keyboard events: {e}")
+            
+        logging.warning("Clipboard monitor stopped")
+    
+    def _monitor_loop(self):
+        """Main monitoring loop that runs in a separate thread"""
+        # Initial clipboard check
+        self._check_clipboard()
+        
+        # Main monitoring loop
+        while self.running:
+            # Simple polling for now - we already have keyboard hooks for most cases
+            time.sleep(0.5)
+            self._check_clipboard()  # Regular checks to catch images not caught by keyboard events
+            
+    def setup_shift_monitoring(self):
+        """Set up keyboard monitoring for double Shift press."""
+        try:
+            # Only set up if enabled in settings
+            if self.settings.get("double_shift_capture", False):
+                # Register shift key press event without suppression to allow system hotkeys
+                keyboard.on_press_key('shift', self.on_shift_press, suppress=False)
+                # Also register release event to track when shift is released, without suppression
+                keyboard.on_release_key('shift', self.on_shift_release, suppress=False)
+                logging.info("Shift key monitoring set up successfully")
+            else:
+                logging.info("Double shift capture is disabled in settings")
+        except Exception as e:
+            logging.error(f"Error setting up shift key monitoring: {e}")
+    
+    def on_shift_press(self, e):
+        """Handle Shift key press event."""
+        try:
+            # Skip if disabled in settings
+            if not self.settings.get("double_shift_capture", False):
+                return
+            
+            current_time = time.time()
+            
+            # Only count this press if shift was released since last press
+            if not self.shift_released:
+                return
+                
+            # Set flag to false until shift is released
+            self.shift_released = False
+            
+            # Clean up old press times (older than threshold)
+            self.shift_press_times = [t for t in self.shift_press_times 
+                                 if current_time - t < self.shift_press_threshold]
+            
+            # Add current press time
+            self.shift_press_times.append(current_time)
+            
+            # Check if we have at least 2 presses within threshold
+            if len(self.shift_press_times) >= 2:
+                # This is a double shift press
+                logging.info("Double Shift detected, capturing image")
+                
+                # Clear press times to avoid triple detection
+                self.shift_press_times = []
+                
+                # Ensure no modifier keys are stuck
+                for key in ['ctrl', 'shift', 'alt']:
+                    keyboard.release(key)
+                
+                # Capture the image without using any mouse events
+                self._capture_with_direct_copy()
+        except Exception as e:
+            logging.error(f"Error in shift press handler: {e}")
+    
+    def on_shift_release(self, e):
+        """Handle Shift key release event."""
+        try:
+            self.shift_released = True
+        except Exception as e:
+            logging.error(f"Error in shift release handler: {e}")
+    
+    def _capture_with_direct_copy(self):
+        """Capture content at cursor position using direct screenshot."""
+        try:
+            # Get cursor position
+            cursor_pos = self.get_cursor_position()
+            if not cursor_pos:
+                return
+                
+            # Get settings for capture dimensions
+            capture_width = self.settings.get("capture_width", 720)  # Default to 720 if not specified
+            capture_height = self.settings.get("capture_height", 480)  # Default to 480 if not specified
+            
+            # Ensure settings exist and are valid
+            if not isinstance(capture_width, int) or capture_width <= 0:
+                logging.warning(f"Invalid capture_width setting: {capture_width}, using default")
+                capture_width = 720
+                
+            if not isinstance(capture_height, int) or capture_height <= 0:
+                logging.warning(f"Invalid capture_height setting: {capture_height}, using default")
+                capture_height = 480
+
+            # Get window class for logging only
+            hwnd = self.get_window_at_cursor(cursor_pos)
+            class_name = self.get_window_class(hwnd) if hwnd else "Unknown"
+            logging.warning(f"Double-shift capture requested at window class: {class_name}")
+            
+            # Capture a fixed area around the cursor with the specified dimensions
+            screenshot = self.capture_screen_area(
+                cursor_pos, 
+                width=capture_width, 
+                height=capture_height
+            )
+            
+            if screenshot:
+                logging.info("Successfully captured screen area")
+                # Convert PIL image to QImage and emit signal to display it
+                self._emit_image_captured_signal(screenshot)
+                
+                # We don't save to history here - the main app handles that based on settings
+                return True
+            else:
+                logging.error("Failed to capture screen area")
+                return False
+                
+        except Exception as e:
+            logging.error(f"Error in direct capture: {e}")
+            return False
+    
+    def _emit_image_captured_signal(self, pil_image):
+        """Convert PIL image to QImage and emit it."""
+        try:
+            # Convert PIL image to QImage
+            if pil_image.mode == "RGB":
+                r, g, b = pil_image.split()
+                pil_image = Image.merge("RGB", (r, g, b))  # Keep original RGB order
+            elif pil_image.mode == "RGBA":
+                r, g, b, a = pil_image.split()
+                pil_image = Image.merge("RGBA", (r, g, b, a))  # Keep original RGBA order
+            
+            data = pil_image.tobytes("raw", pil_image.mode)
+            
+            qimage = QImage(
+                data, 
+                pil_image.width, 
+                pil_image.height, 
+                pil_image.width * (4 if pil_image.mode == "RGBA" else 3), 
+                QImage.Format_RGBA8888 if pil_image.mode == "RGBA" else QImage.Format_RGB888
+            )
+            
+            # Emit the signal with QImage
+            logging.info("Emitting image_captured signal")
+            self.image_captured.emit(qimage)
+            
+            # Also put in clipboard to ensure consistency
+            clipboard = QApplication.clipboard()
+            clipboard.setImage(qimage)
+            
+        except Exception as e:
+            logging.error(f"Error converting PIL image to QImage: {e}")
+    
+    def _get_image_hash(self, img):
+        """Generate a simple hash of an image to detect changes"""
+        if not img:
+            return None
+        try:
+            # Use the image data to create a simple hash
+            img_data = img.tobytes()
+            return hash(img_data[:1024])  # Only use first 1KB for performance
+        except Exception as e:
+            logging.error(f"Error generating image hash: {e}")
+            return None
+    
+    def _is_image_url(self, text):
+        """Check if the text is a URL pointing to an image"""
+        if not text:
+            return False
+            
+        # Check if it's a URL with common image extensions
+        image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']
+        if any(text.lower().endswith(ext) for ext in image_extensions):
+            return True
+            
+        # Check if it's an image URL without extension (like imgur links)
+        img_url_patterns = [
+            r'https?://.*imgur\.com/\w+',
+            r'https?://.*\.?fbcdn\.net/.*',
+            r'https?://.*\.?pinimg\.com/.*',
+            r'https?://.*images\..*'
+        ]
+        
+        return any(re.match(pattern, text) for pattern in img_url_patterns)
+    
+    def _get_image_from_url(self, url):
+        """Try to download image from URL"""
+        try:
+            # Add User-Agent header to avoid being blocked
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.45 Safari/537.36'}
+            
+            # Create a request with timeout and headers
+            req = Request(url, headers=headers)
+            
+            # Open the URL with a timeout
+            with urlopen(req, timeout=5) as response:
+                # Read the image data
+                img_data = response.read()
+                
+                # Save the URL for reference
+                img = Image.open(io.BytesIO(img_data))
+                
+                # For GIFs, preserve raw data to maintain animation
+                if url.lower().endswith('.gif'):
+                    img.format = 'GIF'
+                    # Attach the raw data for later processing
+                    img._raw_gif_data = img_data
+                
+                logging.info(f"Successfully downloaded image from URL: {url}")
+                return img
+        except Exception as e:
+            logging.error(f"Error downloading image from URL {url}: {e}")
+            return None
+    
+    def _check_clipboard(self):
+        """Check the clipboard for images"""
+        try:
+            # Try to get image directly from clipboard using PIL's ImageGrab
+            img = ImageGrab.grabclipboard()
+            
+            # Check if it's an image (PIL.Image or file list with images)
+            if isinstance(img, Image.Image):
+                # For GIFs, we need to preserve the entire file
+                if getattr(img, 'format', '').upper() == 'GIF':
+                    logging.warning("GIF detected in clipboard, preserving raw data")
+                    try:
+                        # Save to a BytesIO buffer to get the full file with animation
+                        buffer = io.BytesIO()
+                        img.save(buffer, format='GIF')
+                        buffer.seek(0)
+                        
+                        # Open it back to ensure we get all frames
+                        preserved_img = Image.open(buffer)
+                        preserved_img._raw_gif_data = buffer.getvalue()
+                        preserved_img.format = 'GIF'
+                        
+                        img_hash = self._get_image_hash(preserved_img)
+                        if img_hash != self.last_image_hash:
+                            self.last_image_hash = img_hash
+                            self.new_image.emit(preserved_img)
+                            return
+                    except Exception as gif_err:
+                        logging.error(f"Error preserving GIF: {gif_err}")
+                
+                # Ensure image has format set
+                if not getattr(img, 'format', None):
+                    img.format = 'PNG'  # Default to PNG if no format specified
+                
+                img_hash = self._get_image_hash(img)
+                
+                # If it's a new image (different hash)
+                if img_hash != self.last_image_hash:
+                    self.last_image_hash = img_hash
+                    self.new_image.emit(img)
+                    return
+            
+            # Handle file list (could be images from file explorer)
+            elif isinstance(img, list):
+                for file_path in img:
+                    try:
+                        # Check if it's an image file by extension
+                        if self._is_image_file(file_path):
+                            # For GIFs, we need special handling to preserve animation
+                            if file_path.lower().endswith('.gif'):
+                                try:
+                                    # Read the raw file bytes
+                                    with open(file_path, 'rb') as f:
+                                        gif_data = f.read()
+                                    
+                                    # Create a BytesIO object and load the image
+                                    buffer = io.BytesIO(gif_data)
+                                    gif_img = Image.open(buffer)
+                                    gif_img.format = 'GIF'
+                                    
+                                    # Store the raw bytes for later
+                                    gif_img._raw_gif_data = gif_data
+                                    
+                                    img_hash = self._get_image_hash(gif_img)
+                                    if img_hash != self.last_image_hash:
+                                        logging.warning(f"GIF file detected in clipboard: {file_path}")
+                                        self.last_image_hash = img_hash
+                                        self.new_image.emit(gif_img)
+                                        return
+                                except Exception as e:
+                                    logging.error(f"Error handling GIF file: {e}")
+                            else:
+                                # Regular image file
+                                with Image.open(file_path) as file_img:
+                                    # Create a copy with the format set
+                                    new_img = file_img.copy()
+                                    new_img.format = file_path.split('.')[-1].upper()
+                                    
+                                    img_hash = self._get_image_hash(new_img)
+                                    
+                                    # If it's a new image (different hash)
+                                    if img_hash != self.last_image_hash:
+                                        self.last_image_hash = img_hash
+                                        self.new_image.emit(new_img)
+                                        return
+                    except Exception as e:
+                        logging.error(f"Error processing file from clipboard: {e}")
+            
+            # If we get here, try the other clipboard formats
+            
+            # Check for images in HTML format (often used by browsers)
+            html_img = self._check_clipboard_html()
+            if html_img and isinstance(html_img, Image.Image):
+                # Ensure format is set
+                if not getattr(html_img, 'format', None):
+                    html_img.format = 'PNG'
+                
+                img_hash = self._get_image_hash(html_img)
+                if img_hash != self.last_image_hash:
+                    self.last_image_hash = img_hash
+                    self.new_image.emit(html_img)
+                    return
+            
+            # Check for image URLs in clipboard text
+            url_img = self._check_clipboard_text()
+            if url_img and isinstance(url_img, Image.Image):
+                # Ensure format is set
+                if not getattr(url_img, 'format', None):
+                    # Try to get format from URL extension if available
+                    if hasattr(url_img, '_url') and url_img._url:
+                        ext = url_img._url.split('.')[-1].lower()
+                        if ext in ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp']:
+                            url_img.format = ext.upper()
+                    else:
+                        url_img.format = 'PNG'
+                
+                img_hash = self._get_image_hash(url_img)
+                if img_hash != self.last_image_hash:
+                    self.last_image_hash = img_hash
+                    self.new_image.emit(url_img)
+                    return
+            
+        except Exception as e:
+            logging.error(f"Error checking clipboard: {e}")
+    
+    def _is_image_file(self, file_path):
+        """Check if a file is an image based on its extension."""
+        if not file_path:
+            return False
+            
+        # List of common image extensions
+        image_extensions = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.tiff', '.ico']
+        
+        # Check if the file has an image extension
+        return any(file_path.lower().endswith(ext) for ext in image_extensions)
+    
+    def _check_clipboard_text(self):
+        """Check for image URLs in the clipboard text"""
+        try:
+            win32clipboard.OpenClipboard()
+            
+            # Check if text is available
+            if win32clipboard.IsClipboardFormatAvailable(win32con.CF_TEXT) or win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
+                # Get text from clipboard
+                if win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
+                    text = win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT)
+                else:
+                    text = win32clipboard.GetClipboardData(win32con.CF_TEXT)
+                    if isinstance(text, bytes):
+                        text = text.decode('utf-8', errors='ignore')
+                
+                win32clipboard.CloseClipboard()
+                
+                # Check if it's an image URL
+                if self._is_image_url(text) and text != self.last_web_url:
+                    self.last_web_url = text
+                    
+                    # Try to get image from the URL
+                    img = self._get_image_from_url(text)
+                    if img and isinstance(img, Image.Image):
+                        return img
+            else:
+                win32clipboard.CloseClipboard()
+                
+        except Exception as e:
+            try:
+                win32clipboard.CloseClipboard()
+            except:
+                pass
+            logging.error(f"Error checking clipboard text: {e}")
+            
+        return None
+    
+    def _check_clipboard_html(self):
+        """Check for images in HTML format (often used by browsers)"""
+        try:
+            win32clipboard.OpenClipboard()
+            
+            # Get available formats
+            formats = []
+            format_id = 0
+            while True:
+                try:
+                    format_id = win32clipboard.EnumClipboardFormats(format_id)
+                    if format_id == 0:
+                        break
+                    formats.append(format_id)
+                except:
+                    break
+                
+            # Look for HTML format
+            html_format = win32clipboard.RegisterClipboardFormat("HTML Format")
+            if html_format in formats:
+                data = win32clipboard.GetClipboardData(html_format)
+                win32clipboard.CloseClipboard()
+                
+                # Check for image tags in HTML
+                if isinstance(data, bytes):
+                    data = data.decode('utf-8', errors='ignore')
+                
+                # Look for image source URLs
+                image_urls = re.findall(r'<img.*?src="(.*?)"', data)
+                if image_urls:
+                    # Try each URL until we get a valid image
+                    for url in image_urls:
+                        if url != self.last_web_url:
+                            self.last_web_url = url
+                            img = self._get_image_from_url(url)
+                            if img and isinstance(img, Image.Image):
+                                return img
+            else:
+                win32clipboard.CloseClipboard()
+        except Exception as e:
+            try:
+                win32clipboard.CloseClipboard()
+            except:
+                pass
+            logging.error(f"Error checking clipboard HTML: {e}")
+            
+        return None
+    
+    def capture_screen_area(self, center_pos, width=100, height=100):
+        """Capture a rectangular area of the screen around the cursor position."""
+        try:
+            # Calculate the coordinates for the capture box
+            x, y = center_pos
+            
+            # Get screen size to ensure we stay within bounds
+            screen_width, screen_height = self.get_screen_size()
+            
+            # Calculate the left, top, right, bottom coordinates
+            # Ensure the capture area is centered on the cursor
+            left = max(0, x - width // 2)
+            top = max(0, y - height // 2)
+            right = left + width
+            bottom = top + height
+            
+            # If the right or bottom edge is beyond the screen, adjust left/top to fit
+            if right > screen_width:
+                left = max(0, screen_width - width)
+                right = screen_width
+                
+            if bottom > screen_height:
+                top = max(0, screen_height - height)
+                bottom = screen_height
+            
+            # Ensure we're capturing the requested dimensions when possible
+            actual_width = right - left
+            actual_height = bottom - top
+            
+            # Log the actual capture dimensions for debugging
+            logging.warning(f"Capturing area: {actual_width}x{actual_height} at ({left},{top})")
+            
+            # Capture the screenshot
+            screenshot = ImageGrab.grab(bbox=(left, top, right, bottom))
+            return screenshot
+        except Exception as e:
+            logging.error(f"Error capturing screen area: {e}")
+            return None
+    
+    def get_cursor_position(self):
+        """Get the current cursor position."""
+        try:
+            cursor_pos = wintypes.POINT()
+            ctypes.windll.user32.GetCursorPos(ctypes.byref(cursor_pos))
+            return (cursor_pos.x, cursor_pos.y)
+        except Exception as e:
+            logging.error(f"Error getting cursor position: {e}")
+            return None
+    
+    def get_window_at_cursor(self, cursor_pos):
+        """Get the window handle at the cursor position."""
+        try:
+            hwnd = ctypes.windll.user32.WindowFromPoint(cursor_pos[0], cursor_pos[1])
+            return hwnd
+        except Exception as e:
+            logging.error(f"Error getting window at cursor: {e}")
+            return None
+    
+    def get_window_class(self, hwnd):
+        """Get the class name of the window."""
+        try:
+            buffer_size = 256
+            class_name = ctypes.create_unicode_buffer(buffer_size)
+            ctypes.windll.user32.GetClassNameW(hwnd, class_name, buffer_size)
+            return class_name.value
+        except Exception as e:
+            logging.error(f"Error getting window class: {e}")
+            return ""
+    
+    def get_screen_size(self):
+        """Get the size of the primary screen."""
+        try:
+            user32 = ctypes.windll.user32
+            screen_width = user32.GetSystemMetrics(0)   # SM_CXSCREEN
+            screen_height = user32.GetSystemMetrics(1)  # SM_CYSCREEN
+            return screen_width, screen_height
+        except Exception as e:
+            logging.error(f"Error getting screen size: {e}")
+            return 1920, 1080  # Default fallback
+    
+    def is_likely_an_image(self, image):
+        """Check if the captured area is likely to be an image (not just UI)."""
+        try:
+            # Convert to RGBA to handle transparency
+            rgba_image = image.convert("RGBA")
+            width, height = rgba_image.size
+            
+            # Count non-white and non-transparent pixels
+            non_white_count = 0
+            total_pixels = width * height
+            
+            # Sample pixels to save processing time
+            sample_size = min(1000, total_pixels)
+            sample_step = max(1, total_pixels // sample_size)
+            
+            for i in range(0, total_pixels, sample_step):
+                x = i % width
+                y = i // width
+                r, g, b, a = rgba_image.getpixel((x, y))
+                
+                # Check if pixel is not white and not transparent
+                if a > 20 and not (r > 240 and g > 240 and b > 240):
+                    non_white_count += 1
+            
+            # Calculate percentage of non-white pixels (adjusted for sampling)
+            non_white_percentage = (non_white_count * 100) / (total_pixels // sample_step)
+            
+            # If more than 10% of pixels are non-white, likely an image
+            return non_white_percentage > 10
+        except Exception as e:
+            logging.error(f"Error checking if area is an image: {e}")
+            return False
+    
+    def process_captured_image(self, image):
+        """Process and emit the captured image."""
+        try:
+            # Create a unique hash for the image to avoid duplicates
+            image_hash = str(hash(image.tobytes()))
+            
+            # Check if this is a new image
+            if image_hash != self.last_image_hash:
+                self.last_image_hash = image_hash
+                
+                # Set the format to PNG for consistent handling
+                if not hasattr(image, 'format') or not image.format:
+                    image.format = "PNG"
+                
+                # Emit the image
+                self.new_image.emit(image)
+                logging.info("Image captured from screen emitted")
+        except Exception as e:
+            logging.error(f"Error processing captured image: {e}")
+
+    def set_overlay_stylesheet(self):
+        self.setStyleSheet("background-color: #252525; border: 4px solid #000000 !important;")
