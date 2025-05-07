@@ -2,7 +2,10 @@
 
 A configurable overlay and history saver for all images you may deal with, including fast screenshot functionality and even GIF playback.
 
+
+
 ## Features
+<img width="306" style="display: block; margin: auto;" src="https://github.com/user-attachments/assets/fcc6177e-45df-4869-ad0d-dc85b3abfd3e" />
 
 - Monitors clipboard for images (PrintScreen or Ctrl+C but not really it looks at the file content but if I change this setting things break, yay.)
 - Displays images in a moveable, resizable, transparency-adjustable overlay that is such a dirty little overlay you can resize it with the scroll-wheel 	and it will maintain aspect ratios no matter what.
@@ -14,6 +17,9 @@ A configurable overlay and history saver for all images you may deal with, inclu
 - Dark/Light/Auto theme support but just use dark cause it's slightly prettier.
 - Image history saving option, with history on you can easily find images from throughout your day.
 - Only now realizing how goon-friendly most of this program is.
+
+
+
 
 ## Requirements
 
