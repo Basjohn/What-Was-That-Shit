@@ -91,12 +91,28 @@ class SystemTrayManager(QObject):
     
     def cleanup(self):
         """Clean up resources before exiting."""
-        if self.tray_icon:
-            self.tray_icon.hide()
+        try:
+            if hasattr(self, 'tray_menu') and self.tray_menu:
+                # First detach the menu from the tray icon
+                if hasattr(self, 'tray_icon') and self.tray_icon:
+                    self.tray_icon.setContextMenu(None)
+                    
+                # Clear and delete all actions from the menu
+                self.tray_menu.clear()
+                self.tray_menu.deleteLater()
+                self.tray_menu = None
             
-            # Explicitly delete the tray icon to ensure resources are freed
-            self.tray_icon.deleteLater()
-            self.tray_icon = None
-            
-            # Process pending events to ensure deletion completes
-            QApplication.processEvents()
+            # Now handle the tray icon
+            if hasattr(self, 'tray_icon') and self.tray_icon:
+                self.tray_icon.hide()
+                
+                # Explicitly delete the tray icon to ensure resources are freed
+                self.tray_icon.deleteLater()
+                self.tray_icon = None
+                
+                # Process pending events to ensure deletion completes
+                QApplication.processEvents()
+                
+            logging.info("System tray resources cleaned up")
+        except Exception as e:
+            logging.error(f"Error during system tray cleanup: {e}")

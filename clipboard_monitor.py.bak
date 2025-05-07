@@ -14,9 +14,9 @@ import keyboard
 import win32clipboard
 import win32con
 from PIL import Image, ImageGrab
-from PyQt5.QtCore import QObject, pyqtSignal, QTimer, QMimeData, Qt, QRect, QThread
-from PyQt5.QtGui import QImage, QPainter, QPen, QColor
-from PyQt5.QtWidgets import QApplication, QWidget
+from PyQt5.QtCore import QObject, pyqtSignal, QTimer
+from PyQt5.QtGui import QImage
+from PyQt5.QtWidgets import QApplication
 
 # Import mss for better multi-monitor screenshot support
 try:
@@ -26,80 +26,6 @@ except ImportError:
     MSS_AVAILABLE = False
     logging.warning("MSS library not available. Multi-monitor support may be limited.")
     logging.warning("To enable better multi-monitor support, install mss: pip install mss")
-
-
-class CaptureFrameOverlay(QWidget):
-    """A transparent overlay widget that shows a blue outline around the captured area."""
-    
-    def __init__(self, rect, parent=None):
-        try:
-            super().__init__(parent)
-            self.rect = rect
-            
-            # Set up the overlay window properties
-            self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool | Qt.X11BypassWindowManagerHint)
-            self.setAttribute(Qt.WA_TranslucentBackground)
-            self.setAttribute(Qt.WA_ShowWithoutActivating)
-            self.setAttribute(Qt.WA_DeleteOnClose)  # Ensure widget is deleted when closed
-            
-            # Set the geometry to cover the entire virtual screen (all monitors)
-            desktop = QApplication.desktop()
-            virtual_rect = QRect()
-            
-            # Get the combined geometry of all screens
-            for i in range(desktop.screenCount()):
-                screen_rect = desktop.screenGeometry(i)
-                virtual_rect = virtual_rect.united(screen_rect)
-                
-            logging.info(f"Setting overlay to cover virtual screen: {virtual_rect.x()},{virtual_rect.y()} size {virtual_rect.width()}x{virtual_rect.height()}")
-            self.setGeometry(virtual_rect)
-            
-            # Show the overlay
-            self.show()
-            
-            # Set up a timer to automatically close the overlay after 300ms
-            self.close_timer = QTimer(self)
-            self.close_timer.timeout.connect(self.close_safely)
-            self.close_timer.setSingleShot(True)
-            self.close_timer.start(300)
-            
-            # Safety timer - force close after 1 second if the normal timer fails
-            QTimer.singleShot(1000, self.force_close)
-            
-            logging.info(f"Created capture frame overlay at {rect.x()},{rect.y()} size {rect.width()}x{rect.height()}")
-        except Exception as e:
-            logging.error(f"Error initializing CaptureFrameOverlay: {e}")
-    
-    def close_safely(self):
-        """Close the overlay safely."""
-        try:
-            if hasattr(self, 'close_timer') and self.close_timer and self.close_timer.isActive():
-                self.close_timer.stop()
-            self.close()
-        except Exception as e:
-            logging.error(f"Error closing overlay: {e}")
-            self.force_close()
-    
-    def force_close(self):
-        """Force close the overlay if it's still open."""
-        try:
-            if self.isVisible():
-                logging.warning("Force closing capture frame overlay")
-                self.close()
-        except Exception as e:
-            logging.error(f"Error force closing overlay: {e}")
-    
-    def paintEvent(self, event):
-        """Draw a blue rectangle outline around the captured area."""
-        try:
-            painter = QPainter(self)
-            pen = QPen(QColor(0, 120, 255))  # Bright blue color
-            pen.setWidth(3)  # 3-pixel wide line
-            painter.setPen(pen)
-            painter.drawRect(self.rect)
-        except Exception as e:
-            logging.error(f"Error painting capture frame: {e}")
-
 
 # Define necessary structures for Windows API calls
 class POINT(ctypes.Structure):
@@ -150,7 +76,6 @@ class ClipboardMonitor(QObject):
     # Signal emitted when an image is captured from the clipboard
     new_image = pyqtSignal(object)
     image_captured = pyqtSignal(object)
-    capture_frame_signal = pyqtSignal(object)
     
     def __init__(self, settings):
         super().__init__()
@@ -164,30 +89,8 @@ class ClipboardMonitor(QObject):
         self.shift_press_times = []
         self.shift_press_threshold = 0.3  # 300ms
         self.shift_released = True  # Track if shift was released since last press
-        self.draw_capture_frame = settings.get('draw_capture_frame', True)  # Enable the blue rectangle capture frame by default
-        self.capture_overlay = None
-        
-        # Connect the capture frame signal to the create_capture_overlay method
-        self.capture_frame_signal.connect(self.create_capture_overlay)
-        
         self.setup_shift_monitoring()
         
-    def create_capture_overlay(self, rect):
-        """Create a capture frame overlay at the specified rectangle."""
-        try:
-            # Create the overlay on the main thread
-            if QThread.currentThread() != QApplication.instance().thread():
-                logging.warning("Cannot create overlay from non-UI thread")
-                return
-                
-            # Store a reference to prevent garbage collection
-            self.capture_overlay = CaptureFrameOverlay(rect)
-            
-            # Log success
-            logging.info(f"Created capture frame overlay at {rect.x()},{rect.y()} size {rect.width()}x{rect.height()}")
-        except Exception as e:
-            logging.error(f"Error creating capture frame overlay: {e}")
-            
     def start(self):
         """Start monitoring the clipboard for images"""
         if self.running:
@@ -322,19 +225,6 @@ class ClipboardMonitor(QObject):
                 logging.info("Successfully captured screen area")
                 # Convert PIL image to QImage and emit signal to display it
                 self._emit_image_captured_signal(screenshot)
-                
-                # If draw_capture_frame is enabled, emit signal to create overlay
-                if self.draw_capture_frame:
-                    try:
-                        # Create a QRect for the capture area
-                        x = cursor_pos[0] - capture_width // 2
-                        y = cursor_pos[1] - capture_height // 2
-                        capture_rect = QRect(x, y, capture_width, capture_height)
-                        
-                        # Emit signal to create the overlay
-                        self.capture_frame_signal.emit(capture_rect)
-                    except Exception as e:
-                        logging.error(f"Error creating capture frame: {e}")
                 
                 # We don't save to history here - the main app handles that based on settings
                 return True

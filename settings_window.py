@@ -451,7 +451,7 @@ class SettingsWindow(QDialog):
         layout.setSpacing(10)
         
         # PrintScreen monitoring
-        self.monitor_print_screen_checkbox = QCheckBox("Monitor PrintScreen")
+        self.monitor_print_screen_checkbox = QCheckBox("Monitor Print Screen")
         layout.addWidget(self.monitor_print_screen_checkbox)
         
         # Ctrl+C monitoring
@@ -459,11 +459,11 @@ class SettingsWindow(QDialog):
         layout.addWidget(self.monitor_ctrl_c_checkbox)
         
         # Auto refresh
-        self.auto_refresh_checkbox = QCheckBox("Auto-refresh overlay on clipboard change")
+        self.auto_refresh_checkbox = QCheckBox("Auto-Refresh Overlay On Clipboard Change")
         layout.addWidget(self.auto_refresh_checkbox)
         
         # Minimize on startup
-        self.minimize_on_startup_checkbox = QCheckBox("Minimize on startup")
+        self.minimize_on_startup_checkbox = QCheckBox("Minimize On Startup")
         layout.addWidget(self.minimize_on_startup_checkbox)
         
         group_box.setLayout(layout)
@@ -520,25 +520,39 @@ class SettingsWindow(QDialog):
         layout.addWidget(QLabel("Resize Options:"))
         
         # Resize image to fit window
-        self.resize_image_checkbox = QCheckBox("Resize image to fit window")
+        self.resize_image_checkbox = QCheckBox("Resize Image To Fit Window")
         self.resize_image_checkbox.setChecked(self.settings.get("resize_image_to_fit", True))
         layout.addWidget(self.resize_image_checkbox)
         
         # Scroll Wheel Resize option
-        self.scroll_wheel_resize_checkbox = QCheckBox("Enable scroll wheel resizing")
+        self.scroll_wheel_resize_checkbox = QCheckBox("Enable Scroll Wheel Resizing")
         self.scroll_wheel_resize_checkbox.setChecked(self.settings.get("scroll_wheel_resize", True))
         layout.addWidget(self.scroll_wheel_resize_checkbox)
         
         # Double Shift Capture option
-        self.double_shift_capture_checkbox = QCheckBox("Enable double shift image capture")
+        self.double_shift_capture_checkbox = QCheckBox("Enable Double Shift Image Capture")
         self.double_shift_capture_checkbox.setChecked(self.settings.get("double_shift_capture", False))
         layout.addWidget(self.double_shift_capture_checkbox)
+        
+        # Video Aware Capture option
+        self.video_aware_capture_checkbox = QCheckBox("Save Entire Video Frames With Double Shift")
+        self.video_aware_capture_checkbox.setChecked(self.settings.get("video_aware_capture", False))
+        self.video_aware_capture_checkbox.setToolTip("Experimental, aka it won't work for shit yet.")
+        # Connect the stateChanged signal to a handler that will also check the double shift checkbox
+        self.video_aware_capture_checkbox.stateChanged.connect(self.on_video_aware_changed)
+        layout.addWidget(self.video_aware_capture_checkbox)
+        
+        # Draw Capture Frame option
+        self.draw_capture_frame_checkbox = QCheckBox("Draw Capture Frame")
+        self.draw_capture_frame_checkbox.setChecked(self.settings.get("draw_capture_frame", False))
+        self.draw_capture_frame_checkbox.setToolTip("When enabled, shows a blue outline around the area being captured with double shift for 0.3 seconds")
+        layout.addWidget(self.draw_capture_frame_checkbox)
         
         # Double-shift capture size
         capture_size_layout = QHBoxLayout()
         
         # Add a "Double-shift capture size:" label
-        capture_size_layout.addWidget(QLabel("Double-shift capture size:"))
+        capture_size_layout.addWidget(QLabel("Double-Shift Capture Size:"))
         
         # Height input
         self.capture_height_input = QSpinBox()
@@ -562,7 +576,7 @@ class SettingsWindow(QDialog):
         layout.addLayout(capture_size_layout)
         
         # Clickthrough option
-        self.clickthrough_checkbox = QCheckBox("Allow clicks to pass through overlay")
+        self.clickthrough_checkbox = QCheckBox("Allow Clicks To Pass Through Overlay")
         self.clickthrough_checkbox.setChecked(self.settings.get("clickthrough", False))
         layout.addWidget(self.clickthrough_checkbox)
         
@@ -626,7 +640,7 @@ class SettingsWindow(QDialog):
         layout.setContentsMargins(15, 15, 15, 15)
         
         # Save to history checkbox
-        self.save_history_checkbox = QCheckBox("Save images to history")
+        self.save_history_checkbox = QCheckBox("Save Images To History")
         self.save_history_checkbox.setChecked(self.settings.get("save_history", False))
         self.save_history_checkbox.stateChanged.connect(self.save_history_changed)
         layout.addWidget(self.save_history_checkbox)
@@ -688,12 +702,15 @@ class SettingsWindow(QDialog):
     def update_history_size(self):
         """Update the history folder size label."""
         try:
-            # Get the history folder path
-            history_folder = self.settings.get("history_folder", "")
+            # Get the history folder path directly from the settings object
+            history_folder = self.settings.history_folder
+            logging.info(f"Checking history folder size: {history_folder}")
+            
             if history_folder and os.path.exists(history_folder):
                 size = self.get_folder_size(history_folder)
                 self.history_folder_label.setText(f"{size}")
             else:
+                logging.warning(f"History folder does not exist: {history_folder}")
                 self.history_folder_label.setText("0.00 GB")
         except Exception as e:
             logging.error(f"Error updating history size: {e}")
@@ -716,7 +733,10 @@ class SettingsWindow(QDialog):
     def open_history_folder(self):
         """Open the history folder in the file explorer."""
         try:
-            history_folder = self.settings.get("history_folder", "")
+            # Access the history_folder directly from the settings object
+            history_folder = self.settings.history_folder
+            logging.info(f"Opening history folder: {history_folder}")
+            
             if history_folder and os.path.exists(history_folder):
                 # Use the appropriate command based on the operating system
                 if platform.system() == "Windows":
@@ -725,6 +745,8 @@ class SettingsWindow(QDialog):
                     subprocess.run(["open", history_folder])
                 else:  # Linux or other Unix-like
                     subprocess.run(["xdg-open", history_folder])
+            else:
+                logging.error(f"History folder does not exist: {history_folder}")
         except Exception as e:
             logging.error(f"Error opening history folder: {e}")
     
@@ -746,20 +768,14 @@ class SettingsWindow(QDialog):
             self.minimize_on_startup_checkbox.setChecked(self.settings.get("minimize_on_startup", False))
             
             # Overlay
-            if hasattr(self, 'resize_image_checkbox'):
-                self.resize_image_checkbox.setChecked(self.settings.get("resize_image_to_fit", True))
-            
-            if hasattr(self, 'scroll_wheel_resize_checkbox'):
-                self.scroll_wheel_resize_checkbox.setChecked(self.settings.get("scroll_wheel_resize", True))
-            
-            if hasattr(self, 'double_shift_capture_checkbox'):
-                self.double_shift_capture_checkbox.setChecked(self.settings.get("double_shift_capture", False))
-            
-            if hasattr(self, 'clickthrough_checkbox'):
-                self.clickthrough_checkbox.setChecked(self.settings.get("clickthrough", False))
-            
-            if hasattr(self, 'opacity_slider'):
-                self.opacity_slider.setValue(self.settings.get("opacity", 77))
+            self.resize_image_checkbox.setChecked(self.settings.get("resize_image_to_fit", True))
+            self.scroll_wheel_resize_checkbox.setChecked(self.settings.get("scroll_wheel_resize", True))
+            self.double_shift_capture_checkbox.setChecked(self.settings.get("double_shift_capture", True))
+            self.video_aware_capture_checkbox.setChecked(self.settings.get("video_aware_capture", False))
+            self.draw_capture_frame_checkbox.setChecked(self.settings.get("draw_capture_frame", False))
+            self.clickthrough_checkbox.setChecked(self.settings.get("clickthrough", False))
+            self.opacity_slider.setValue(self.settings.get("opacity", 77))
+            self.update_opacity_label(self.opacity_slider.value())
             
             # Theme
             theme_value = self.settings.get("theme", "dark")
@@ -793,20 +809,13 @@ class SettingsWindow(QDialog):
             self.settings.set("minimize_on_startup", self.minimize_on_startup_checkbox.isChecked())
             
             # Overlay
-            if hasattr(self, 'resize_image_checkbox'):
-                self.settings.set("resize_image_to_fit", self.resize_image_checkbox.isChecked())
-            
-            if hasattr(self, 'scroll_wheel_resize_checkbox'):
-                self.settings.set("scroll_wheel_resize", self.scroll_wheel_resize_checkbox.isChecked())
-            
-            if hasattr(self, 'double_shift_capture_checkbox'):
-                self.settings.set("double_shift_capture", self.double_shift_capture_checkbox.isChecked())
-            
-            if hasattr(self, 'clickthrough_checkbox'):
-                self.settings.set("clickthrough", self.clickthrough_checkbox.isChecked())
-            
-            if hasattr(self, 'opacity_slider'):
-                self.settings.set("opacity", self.opacity_slider.value())
+            self.settings.set("resize_image_to_fit", self.resize_image_checkbox.isChecked())
+            self.settings.set("scroll_wheel_resize", self.scroll_wheel_resize_checkbox.isChecked())
+            self.settings.set("double_shift_capture", self.double_shift_capture_checkbox.isChecked())
+            self.settings.set("video_aware_capture", self.video_aware_capture_checkbox.isChecked())
+            self.settings.set("draw_capture_frame", self.draw_capture_frame_checkbox.isChecked())
+            self.settings.set("clickthrough", self.clickthrough_checkbox.isChecked())
+            self.settings.set("opacity", self.opacity_slider.value())
             
             # Theme
             theme_index = self.theme_combo.currentIndex()
@@ -871,12 +880,24 @@ class SettingsWindow(QDialog):
         
     def closeEvent(self, event):
         """Handle window close event."""
-        # Save window position
-        self.settings.set("settings_window_x", self.pos().x())
-        self.settings.set("settings_window_y", self.pos().y())
-        
-        # Clean up resources
-        self.deleteLater()
+        try:
+            # Save window position
+            self.settings.set("settings_window_x", self.pos().x())
+            self.settings.set("settings_window_y", self.pos().y())
+            
+            # Clean up any UI resources
+            for child in self.findChildren(QWidget):
+                try:
+                    child.deleteLater()
+                except:
+                    pass
+            
+            # Clean up resources
+            self.deleteLater()
+            
+            logging.info("Settings window resources cleaned up")
+        except Exception as e:
+            logging.error(f"Error cleaning up settings window: {e}")
         
         # Accept the event
         event.accept()
@@ -919,25 +940,40 @@ class SettingsWindow(QDialog):
             
         # Connect theme combo box to theme change
         self.theme_combo.currentIndexChanged.connect(self.on_theme_changed)
+        
+        # Connect video aware capture checkbox to on_video_aware_changed
+        if hasattr(self, 'video_aware_capture_checkbox'):
+            self.video_aware_capture_checkbox.stateChanged.connect(self.on_video_aware_changed)
+    
+    def on_video_aware_changed(self, state):
+        """Handle Video Aware Capture checkbox state change."""
+        # If Video Aware Capture is checked, ensure Double Shift Capture is also checked
+        if state == Qt.Checked and hasattr(self, 'double_shift_capture_checkbox'):
+            self.double_shift_capture_checkbox.setChecked(True)
     
     def on_theme_changed(self, index):
         """Handle theme selection change."""
-        theme_data = self.theme_combo.itemData(index)
-        if theme_data:
-            # Apply theme immediately
-            self.apply_theme(theme_data)
-            
-            # Update the settings (but don't save yet)
-            self.settings.set("theme", theme_data)
-            
-            # Apply to overlay immediately if available
-            if self.overlay:
-                if theme_data == "light":
-                    # Light grey background for light theme with black border
-                    self.overlay.setStyleSheet("background-color: #E0E0E0; border: 3px solid #000000;")
-                else:
-                    # Dark grey background for dark theme with black border
-                    self.overlay.setStyleSheet("background-color: #252525; border: 3px solid #000000;")
+        theme_value = self.theme_combo.itemData(index)
+        
+        # Apply the theme
+        self.apply_theme(theme_value)
+        
+        # Store the theme setting
+        self.settings.set("theme", theme_value)
+        
+        # Apply theme to overlay if it exists
+        if self.overlay:
+            if theme_value == "dark":
+                self.overlay.setStyleSheet("background-color: #252525; border: 4px solid #000000 !important;")
+            elif theme_value == "light":
+                self.overlay.setStyleSheet("background-color: #f0f0f0; border: 4px solid #cccccc !important;")
+            else:  # Auto
+                # Determine system theme and apply appropriate style
+                palette = QApplication.palette()
+                if palette.color(QPalette.Window).lightness() < 128:  # Dark theme
+                    self.overlay.setStyleSheet("background-color: #252525; border: 4px solid #000000 !important;")
+                else:  # Light theme
+                    self.overlay.setStyleSheet("background-color: #f0f0f0; border: 4px solid #cccccc !important;")
     
     def save_history_changed(self, state):
         """Handle save history checkbox state change."""

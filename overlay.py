@@ -1,7 +1,7 @@
 import logging
 import sys
 from PyQt5.QtWidgets import (QWidget, QLabel, QVBoxLayout, QMenu, QApplication, 
-                           QAction, QFrame)
+                           QAction, QFrame, QGraphicsDropShadowEffect)
 from PyQt5.QtGui import QPixmap, QImage, QPainter, QCursor, QColor
 from PyQt5.QtCore import Qt, QPoint, QRect, QSize, QEvent, pyqtSignal, QTimer, QBuffer, QByteArray
 from PIL import Image
@@ -9,6 +9,13 @@ import io
 import struct
 
 class ImageOverlay(QWidget):
+    def paintEvent(self, event):
+        """Ensure the overlay background is always cleared (fixes letterboxing/pillarboxing ghosting)."""
+        painter = QPainter(self)
+        color = QColor(30, 30, 33)  # Match your stylesheet background
+        painter.fillRect(self.rect(), color)
+        super().paintEvent(event)
+
     """A frameless, resizable overlay window that displays images copied to the clipboard."""
     
     # Signal to request opening settings
@@ -57,9 +64,15 @@ class ImageOverlay(QWidget):
         self.setStyleSheet("""
             QWidget {
                 background-color: rgb(30, 30, 33);
-                border: 10px solid red;
             }
         """)
+        
+        # Add a stronger, more visible drop shadow around the entire overlay
+        self.shadow_effect = QGraphicsDropShadowEffect()
+        self.shadow_effect.setBlurRadius(20)  # Larger blur for more visibility
+        self.shadow_effect.setColor(QColor(0, 0, 0, 220))  # Darker shadow
+        self.shadow_effect.setOffset(0, 0)  # Centered shadow (appears around the entire window)
+        self.setGraphicsEffect(self.shadow_effect)
         
         # Create image label (for displaying the image)
         self.image_label = QLabel(self)
@@ -154,8 +167,18 @@ class ImageOverlay(QWidget):
         """Load position and size from settings."""
         width = self.settings.get("overlay_width", 500)
         height = self.settings.get("overlay_height", 400)
-        x = self.settings.get("overlay_x", 100)
-        y = self.settings.get("overlay_y", 100)
+        
+        # Try to load the saved position first
+        x = self.settings.get("overlay_position_x", None)
+        y = self.settings.get("overlay_position_y", None)
+        
+        # If no saved position, use the default values
+        if x is None or y is None:
+            x = self.settings.get("overlay_x", 100)
+            y = self.settings.get("overlay_y", 100)
+            logging.info("Using default overlay position")
+        else:
+            logging.info(f"Restored overlay position: {x}, {y}")
         
         # Load last snapped position if available
         self.last_snapped_to = self.settings.get("last_snapped_to", None)
@@ -1003,6 +1026,15 @@ class ImageOverlay(QWidget):
         # Stop animation timer if running
         if self.animation_timer and self.animation_timer.isActive():
             self.animation_timer.stop()
+            
+        # Save window position before closing
+        try:
+            pos = self.pos()
+            self.settings.set("overlay_position_x", pos.x())
+            self.settings.set("overlay_position_y", pos.y())
+            logging.info(f"Saved overlay position: {pos.x()}, {pos.y()}")
+        except Exception as e:
+            logging.error(f"Error saving overlay position: {e}")
             
         # Clear image data to free memory
         self.original_image = None

@@ -48,11 +48,16 @@ class ImageOverlay(QWidget):
         self.current_opacity = self.settings.get("opacity", 77) / 100.0  # Track current opacity
         self.is_full_opacity = False  # Track if we're at full opacity
         
+        # Track the current scaling factor (for mousewheel zoom)
+        self.scale_factor = 1.0
+        self.min_scale_factor = 0.2
+        self.max_scale_factor = 3.0
+        
         # Set background to dark grey for letterboxing/pillarboxing
         self.setStyleSheet("""
             QWidget {
                 background-color: rgb(30, 30, 33);
-                border: 1px solid rgb(100, 100, 100);
+                border: 10px solid red;
             }
         """)
         
@@ -80,6 +85,70 @@ class ImageOverlay(QWidget):
         
         # Hide initially - will show when an image is set
         self.hide()
+        
+        # Install event filter to capture wheel events
+        self.installEventFilter(self)
+    
+    def eventFilter(self, obj, event):
+        """Filter events to ensure wheel events are captured."""
+        if event.type() == QEvent.Wheel and obj is self:
+            # Only process wheel events if scroll wheel resize is enabled
+            if self.settings.get("scroll_wheel_resize", True):
+                # Handle the wheel event for zooming
+                self.wheelEvent(event)
+                # Return True to indicate that the event was handled
+                return True
+        # For other events, call the parent class handler
+        return super().eventFilter(obj, event)
+    
+    def wheelEvent(self, event):
+        """Handle mouse wheel events for resizing the overlay."""
+        try:
+            # Get the current size
+            current_width = self.width()
+            current_height = self.height()
+            
+            # Calculate zoom factor based on wheel delta
+            # Increase zoom sensitivity for better response
+            zoom_factor = 1.0 + (event.angleDelta().y() / 1200.0)
+            
+            # Calculate new scale factor within bounds
+            new_scale = self.scale_factor * zoom_factor
+            new_scale = max(self.min_scale_factor, min(new_scale, self.max_scale_factor))
+            
+            # Calculate scale change since last time
+            scale_change = new_scale / self.scale_factor
+            
+            # Only resize if change is significant enough
+            if abs(scale_change - 1.0) > 0.01:
+                # Save the old scale factor
+                self.scale_factor = new_scale
+                
+                # Calculate new dimensions
+                new_width = int(current_width * scale_change)
+                new_height = int(current_height * scale_change)
+                
+                # Resize the window
+                self.resize(new_width, new_height)
+                
+                # Check if we need to snap after resize
+                self._snap_to_edges()
+                
+                # Update the image display to fit the new size
+                if self.pixmap and self.settings.get("resize_image_to_fit", False):
+                    self._apply_sized_pixmap()
+                
+                # Log the resize
+                logging.debug(f"Wheel resize to {new_width}x{new_height}, scale factor: {self.scale_factor:.2f}")
+                
+            # Accept the event so it's not propagated further
+            event.accept()
+            return True
+            
+        except Exception as e:
+            logging.error(f"Error in wheel event: {e}")
+            event.accept()  # Still accept to prevent propagation
+            return True
     
     def _load_geometry_from_settings(self):
         """Load position and size from settings."""
@@ -118,15 +187,26 @@ class ImageOverlay(QWidget):
     
     def set_image(self, pil_image):
         """Set the image to display in the overlay."""
-        if not pil_image:
-            logging.warning("Attempted to set None image to overlay")
-            return
-            
         try:
-            # Stop any currently playing GIF animation
-            self._stop_animation()
+            # Clear previous image data to prevent memory leaks
+            if self.original_image:
+                self.original_image = None
             
-            # Store the original image
+            if self.pixmap:
+                self.pixmap = None
+                
+            # Clear animation data
+            self.gif_frames = []
+            self.frame_durations = []
+            
+            # Stop animation timer if running
+            if self.animation_timer.isActive():
+                self.animation_timer.stop()
+                
+            self.is_animated_gif = False
+            self.animation_playing = False
+            
+            # Store the new image
             self.original_image = pil_image
             
             # Check if this is an animated GIF
@@ -149,6 +229,49 @@ class ImageOverlay(QWidget):
                     active_window.activateWindow()
         except Exception as e:
             logging.error(f"Error setting image in overlay: {e}")
+    
+    def set_qimage(self, qimage):
+        """Set the image to display directly from a QImage."""
+        try:
+            if qimage and not qimage.isNull():
+                # Store QImage as pixmap
+                self.pixmap = QPixmap.fromImage(qimage)
+                
+                # Store as PIL image as well for consistency with other functions
+                # Convert QImage to bytes
+                byte_array = QByteArray()
+                buffer = QBuffer(byte_array)
+                buffer.open(QBuffer.WriteOnly)
+                qimage.save(buffer, "PNG")
+                buffer.close()
+                
+                # Convert bytes to PIL Image
+                pil_image = Image.open(io.BytesIO(byte_array.data()))
+                pil_image.format = "PNG"  # Set format explicitly
+                self.original_image = pil_image
+                
+                # Reset animation if there was any
+                self._stop_animation()
+                self.is_animated_gif = False
+                
+                # Reset cached values to ensure full refresh
+                self.scale_factor = 1.0
+                
+                # Apply the image to the display
+                self._update_image_display()
+                
+                # Show window if hidden
+                self.show()
+                self.raise_()
+                
+                # Force garbage collection to help with switching between image types
+                import gc
+                gc.collect()
+                
+                return True
+        except Exception as e:
+            logging.error(f"Error setting QImage: {e}")
+            return False
     
     def _restore_snap_position(self):
         """Restore snap position relative to monitor edges."""
@@ -876,18 +999,18 @@ class ImageOverlay(QWidget):
             self._update_image_display()
     
     def closeEvent(self, event):
-        """Handle close events."""
-        # Save position, size and snap information
-        self.settings.update({
-            "overlay_x": self.pos().x(),
-            "overlay_y": self.pos().y(),
-            "overlay_width": self.width(),
-            "overlay_height": self.height()
-        })
-        if self.last_snapped_to:
-            self.settings.set("last_snapped_to", self.last_snapped_to)
+        """Handle close event to properly clean up resources."""
+        # Stop animation timer if running
+        if self.animation_timer and self.animation_timer.isActive():
+            self.animation_timer.stop()
             
-        super().closeEvent(event)
+        # Clear image data to free memory
+        self.original_image = None
+        self.pixmap = None
+        self.gif_frames = []
+        
+        # Accept the close event
+        event.accept()
     
     def apply_settings(self):
         """Apply current settings to the overlay."""
@@ -920,9 +1043,9 @@ class ImageOverlay(QWidget):
         # Apply border and background color based on theme
         theme = self.settings.get("theme", "dark")
         if theme == "light":
-            self.setStyleSheet("background-color: #E0E0E0; border: 1px solid #000000;")
+            self.setStyleSheet("background-color: #E0E0E0; border: 10px solid red;")
         else:
-            self.setStyleSheet("background-color: #252525; border: 1px solid #000000;")
+            self.setStyleSheet("background-color: #252525; border: 10px solid red;")
         
         # Show window after changing flags
         self.show()

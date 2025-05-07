@@ -37,10 +37,13 @@ class Settings:
             "resize_image_to_fit": True,
             "save_history": False,
             "opacity": 77,
+            "opacity_toggled": False,  # New setting to remember opacity toggle state
             "theme": Theme.DARK.value,
             "monitor_print_screen": True,
             "monitor_ctrl_c": True,
             "double_shift_capture": True,
+            "video_aware_capture": False,
+            "draw_capture_frame": False,
             "capture_width": 720,
             "capture_height": 480,
             "overlay_width": 500,

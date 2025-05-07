@@ -18,15 +18,6 @@ from PyQt5.QtCore import QObject, pyqtSignal, QTimer, QMimeData, Qt, QRect, QThr
 from PyQt5.QtGui import QImage, QPainter, QPen, QColor
 from PyQt5.QtWidgets import QApplication, QWidget
 
-# Import mss for better multi-monitor screenshot support
-try:
-    import mss
-    MSS_AVAILABLE = True
-except ImportError:
-    MSS_AVAILABLE = False
-    logging.warning("MSS library not available. Multi-monitor support may be limited.")
-    logging.warning("To enable better multi-monitor support, install mss: pip install mss")
-
 
 class CaptureFrameOverlay(QWidget):
     """A transparent overlay widget that shows a blue outline around the captured area."""
@@ -101,6 +92,15 @@ class CaptureFrameOverlay(QWidget):
             logging.error(f"Error painting capture frame: {e}")
 
 
+# Import mss for better multi-monitor screenshot support
+try:
+    import mss
+    MSS_AVAILABLE = True
+except ImportError:
+    MSS_AVAILABLE = False
+    logging.warning("MSS library not available. Multi-monitor support may be limited.")
+    logging.warning("To enable better multi-monitor support, install mss: pip install mss")
+
 # Define necessary structures for Windows API calls
 class POINT(ctypes.Structure):
     _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
@@ -150,7 +150,7 @@ class ClipboardMonitor(QObject):
     # Signal emitted when an image is captured from the clipboard
     new_image = pyqtSignal(object)
     image_captured = pyqtSignal(object)
-    capture_frame_signal = pyqtSignal(object)
+    capture_frame_signal = pyqtSignal(QRect)  # Signal to create capture frame overlay
     
     def __init__(self, settings):
         super().__init__()
@@ -164,7 +164,7 @@ class ClipboardMonitor(QObject):
         self.shift_press_times = []
         self.shift_press_threshold = 0.3  # 300ms
         self.shift_released = True  # Track if shift was released since last press
-        self.draw_capture_frame = settings.get('draw_capture_frame', True)  # Enable the blue rectangle capture frame by default
+        self.draw_capture_frame = settings.get('draw_capture_frame', False)
         self.capture_overlay = None
         
         # Connect the capture frame signal to the create_capture_overlay method
@@ -187,7 +187,7 @@ class ClipboardMonitor(QObject):
             logging.info(f"Created capture frame overlay at {rect.x()},{rect.y()} size {rect.width()}x{rect.height()}")
         except Exception as e:
             logging.error(f"Error creating capture frame overlay: {e}")
-            
+    
     def start(self):
         """Start monitoring the clipboard for images"""
         if self.running:
@@ -200,16 +200,38 @@ class ClipboardMonitor(QObject):
         
     def stop(self):
         """Stop monitoring the clipboard"""
+        logging.warning("Stopping clipboard monitor...")
+        
+        # Signal thread to stop
         self.running = False
+        
+        # Wait for thread to finish with timeout
         if self.monitor_thread and self.monitor_thread.is_alive():
-            self.monitor_thread.join(timeout=1.0)
+            try:
+                self.monitor_thread.join(timeout=1.0)
+                if self.monitor_thread.is_alive():
+                    logging.warning("Monitor thread did not exit within timeout")
+            except Exception as thread_ex:
+                logging.error(f"Error joining monitor thread: {thread_ex}")
+        
+        # Ensure clipboard is properly closed
+        try:
+            win32clipboard.CloseClipboard()
+        except Exception:
+            # Ignore errors here - clipboard might not be open by this process
+            pass
             
         # Unregister keyboard hooks to prevent memory leaks
         try:
             keyboard.unhook_all()
         except Exception as e:
             logging.error(f"Error unhooking keyboard events: {e}")
-            
+        
+        # Reset any potentially dangerous state
+        self.last_image_hash = None
+        self.shift_pressed_count = 0
+        self.shift_pressed_time = 0
+        
         logging.warning("Clipboard monitor stopped")
     
     def _monitor_loop(self):
@@ -371,10 +393,6 @@ class ClipboardMonitor(QObject):
             logging.info("Emitting image_captured signal")
             self.image_captured.emit(qimage)
             
-            # Also put in clipboard to ensure consistency
-            clipboard = QApplication.clipboard()
-            clipboard.setImage(qimage)
-            
         except Exception as e:
             logging.error(f"Error converting PIL image to QImage: {e}")
     
@@ -386,66 +404,97 @@ class ClipboardMonitor(QObject):
             # Use the image data to create a simple hash
             img_data = img.tobytes()
             return hash(img_data[:1024])  # Only use first 1KB for performance
-        except Exception as e:
-            logging.error(f"Error generating image hash: {e}")
-            return None
-    
-    def _is_image_url(self, text):
-        """Check if the text is a URL pointing to an image"""
-        if not text:
-            return False
             
-        # Check if it's a URL with common image extensions
-        image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']
-        if any(text.lower().endswith(ext) for ext in image_extensions):
-            return True
-            
-        # Check if it's an image URL without extension (like imgur links)
-        img_url_patterns = [
-            r'https?://.*imgur\.com/\w+',
-            r'https?://.*\.?fbcdn\.net/.*',
-            r'https?://.*\.?pinimg\.com/.*',
-            r'https?://.*images\..*'
-        ]
+        # Set flag to false until shift is released
+        self.shift_released = False
         
-        return any(re.match(pattern, text) for pattern in img_url_patterns)
+        # Clean up old press times (older than threshold)
+        self.shift_press_times = [t for t in self.shift_press_times 
+                             if current_time - t < self.shift_press_threshold]
+        
+        # Add current press time
+        self.shift_press_times.append(current_time)
+        
+        # Check if we have at least 2 presses within threshold
+        if len(self.shift_press_times) >= 2:
+            # This is a double shift press
+            logging.info("Double Shift detected, capturing image")
+            
+            # Clear press times to avoid triple detection
+            self.shift_press_times = []
+            
+            # Ensure no modifier keys are stuck
+            for key in ['ctrl', 'shift', 'alt']:
+                keyboard.release(key)
+            
+            # Capture the image without using any mouse events
+            self._capture_with_direct_copy()
+    except Exception as e:
+        logging.error(f"Error in shift press handler: {e}")
     
-    def _get_image_from_url(self, url):
-        """Try to download image from URL"""
-        try:
-            # Add User-Agent header to avoid being blocked
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.45 Safari/537.36'}
-            
-            # Create a request with timeout and headers
-            req = Request(url, headers=headers)
-            
-            # Open the URL with a timeout
-            with urlopen(req, timeout=5) as response:
-                # Read the image data
-                img_data = response.read()
-                
-                # Save the URL for reference
-                img = Image.open(io.BytesIO(img_data))
-                
-                # For GIFs, preserve raw data to maintain animation
-                if url.lower().endswith('.gif'):
-                    img.format = 'GIF'
-                    # Attach the raw data for later processing
-                    img._raw_gif_data = img_data
-                
-                logging.info(f"Successfully downloaded image from URL: {url}")
-                return img
-        except Exception as e:
-            logging.error(f"Error downloading image from URL {url}: {e}")
-            return None
+def on_shift_release(self, e):
+    """Handle Shift key release event."""
+    try:
+        self.shift_released = True
+    except Exception as e:
+        logging.error(f"Error in shift release handler: {e}")
     
-    def _check_clipboard(self):
-        """Check the clipboard for images"""
-        try:
-            # Try to get image directly from clipboard using PIL's ImageGrab
-            img = ImageGrab.grabclipboard()
+def _capture_with_direct_copy(self):
+    """Capture content at cursor position using direct screenshot."""
+    try:
+        # Get cursor position
+        cursor_pos = self.get_cursor_position()
+        if not cursor_pos:
+            return
             
-            # Check if it's an image (PIL.Image or file list with images)
+        # Get settings for capture dimensions
+        capture_width = self.settings.get("capture_width", 720)  # Default to 720 if not specified
+        capture_height = self.settings.get("capture_height", 480)  # Default to 480 if not specified
+        
+        # Ensure settings exist and are valid
+        if not isinstance(capture_width, int) or capture_width <= 0:
+            logging.warning(f"Invalid capture_width setting: {capture_width}, using default")
+            capture_width = 720
+            
+        if not isinstance(capture_height, int) or capture_height <= 0:
+            logging.warning(f"Invalid capture_height setting: {capture_height}, using default")
+            capture_height = 480
+
+        # Get window class for logging only
+        hwnd = self.get_window_at_cursor(cursor_pos)
+        class_name = self.get_window_class(hwnd) if hwnd else "Unknown"
+        logging.warning(f"Double-shift capture requested at window class: {class_name}")
+        
+        # Capture a fixed area around the cursor with the specified dimensions
+        screenshot = self.capture_screen_area(
+            cursor_pos, 
+            width=capture_width, 
+            height=capture_height
+        )
+        
+        if screenshot:
+            logging.info("Successfully captured screen area")
+            # Convert PIL image to QImage and emit signal to display it
+            self._emit_image_captured_signal(screenshot)
+            
+            # If draw_capture_frame is enabled, emit signal to create overlay
+            if self.draw_capture_frame:
+                try:
+                    # Create a QRect for the capture area
+                    x = cursor_pos[0] - capture_width // 2
+                    y = cursor_pos[1] - capture_height // 2
+                    capture_rect = QRect(x, y, capture_width, capture_height)
+                    
+                    # Emit signal to create the overlay
+                    self.capture_frame_signal.emit(capture_rect)
+                except Exception as e:
+                    logging.error(f"Error creating capture frame: {e}")
+            
+            # We don't save to history here - the main app handles that based on settings
+            return True
+        else:
+            logging.error("Failed to capture screen area")
+                img = ImageGrab.grabclipboard()
             if isinstance(img, Image.Image):
                 # For GIFs, we need to preserve the entire file
                 if getattr(img, 'format', '').upper() == 'GIF':
@@ -577,86 +626,109 @@ class ClipboardMonitor(QObject):
     
     def _check_clipboard_text(self):
         """Check for image URLs in the clipboard text"""
+        # Initialize COM for this operation
         try:
-            win32clipboard.OpenClipboard()
+            import pythoncom
+            pythoncom.CoInitialize()
             
-            # Check if text is available
-            if win32clipboard.IsClipboardFormatAvailable(win32con.CF_TEXT) or win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
-                # Get text from clipboard
-                if win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
-                    text = win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT)
-                else:
-                    text = win32clipboard.GetClipboardData(win32con.CF_TEXT)
-                    if isinstance(text, bytes):
-                        text = text.decode('utf-8', errors='ignore')
-                
-                win32clipboard.CloseClipboard()
-                
-                # Check if it's an image URL
-                if self._is_image_url(text) and text != self.last_web_url:
-                    self.last_web_url = text
-                    
-                    # Try to get image from the URL
-                    img = self._get_image_from_url(text)
-                    if img and isinstance(img, Image.Image):
-                        return img
-            else:
-                win32clipboard.CloseClipboard()
-                
-        except Exception as e:
             try:
-                win32clipboard.CloseClipboard()
-            except:
-                pass
-            logging.error(f"Error checking clipboard text: {e}")
+                win32clipboard.OpenClipboard()
+                
+                # Check if text is available
+                if win32clipboard.IsClipboardFormatAvailable(win32con.CF_TEXT) or win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
+                    # Get text from clipboard
+                    if win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
+                        text = win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT)
+                    else:
+                        text = win32clipboard.GetClipboardData(win32con.CF_TEXT)
+                        if isinstance(text, bytes):
+                            text = text.decode('utf-8', errors='ignore')
+                    
+                    win32clipboard.CloseClipboard()
+                    
+                    # Check if it's an image URL
+                    if self._is_image_url(text) and text != self.last_web_url:
+                        self.last_web_url = text
+                        
+                        # Try to get image from the URL
+                        img = self._get_image_from_url(text)
+                        if img and isinstance(img, Image.Image):
+                            return img
+                else:
+                    win32clipboard.CloseClipboard()
+                    
+            except Exception as e:
+                try:
+                    win32clipboard.CloseClipboard()
+                except:
+                    pass
+                logging.error(f"Error checking clipboard text: {e}")
+                
+            # Always clean up COM when done
+            finally:
+                pythoncom.CoUninitialize()
+                
+        except ImportError:
+            logging.error("Could not import pythoncom for COM operations")
             
         return None
     
     def _check_clipboard_html(self):
         """Check for images in HTML format (often used by browsers)"""
+        # Initialize COM for this operation
         try:
-            win32clipboard.OpenClipboard()
+            import pythoncom
+            pythoncom.CoInitialize()
             
-            # Get available formats
-            formats = []
-            format_id = 0
-            while True:
-                try:
-                    format_id = win32clipboard.EnumClipboardFormats(format_id)
-                    if format_id == 0:
-                        break
-                    formats.append(format_id)
-                except:
-                    break
-                
-            # Look for HTML format
-            html_format = win32clipboard.RegisterClipboardFormat("HTML Format")
-            if html_format in formats:
-                data = win32clipboard.GetClipboardData(html_format)
-                win32clipboard.CloseClipboard()
-                
-                # Check for image tags in HTML
-                if isinstance(data, bytes):
-                    data = data.decode('utf-8', errors='ignore')
-                
-                # Look for image source URLs
-                image_urls = re.findall(r'<img.*?src="(.*?)"', data)
-                if image_urls:
-                    # Try each URL until we get a valid image
-                    for url in image_urls:
-                        if url != self.last_web_url:
-                            self.last_web_url = url
-                            img = self._get_image_from_url(url)
-                            if img and isinstance(img, Image.Image):
-                                return img
-            else:
-                win32clipboard.CloseClipboard()
-        except Exception as e:
             try:
-                win32clipboard.CloseClipboard()
-            except:
-                pass
-            logging.error(f"Error checking clipboard HTML: {e}")
+                win32clipboard.OpenClipboard()
+                
+                # Get available formats
+                formats = []
+                format_id = 0
+                while True:
+                    try:
+                        format_id = win32clipboard.EnumClipboardFormats(format_id)
+                        if format_id == 0:
+                            break
+                        formats.append(format_id)
+                    except:
+                        break
+                    
+                # Look for HTML format
+                html_format = win32clipboard.RegisterClipboardFormat("HTML Format")
+                if html_format in formats:
+                    data = win32clipboard.GetClipboardData(html_format)
+                    win32clipboard.CloseClipboard()
+                    
+                    # Check for image tags in HTML
+                    if isinstance(data, bytes):
+                        data = data.decode('utf-8', errors='ignore')
+                    
+                    # Look for image source URLs
+                    image_urls = re.findall(r'<img.*?src="(.*?)"', data)
+                    if image_urls:
+                        # Try each URL until we get a valid image
+                        for url in image_urls:
+                            if url != self.last_web_url:
+                                self.last_web_url = url
+                                img = self._get_image_from_url(url)
+                                if img and isinstance(img, Image.Image):
+                                    return img
+                else:
+                    win32clipboard.CloseClipboard()
+            except Exception as e:
+                try:
+                    win32clipboard.CloseClipboard()
+                except:
+                    pass
+                logging.error(f"Error checking clipboard HTML: {e}")
+            finally:
+                # Always clean up COM when done
+                pythoncom.CoUninitialize()
+                
+        except ImportError:
+            logging.error("Could not import pythoncom for COM operations")
             
         return None
     

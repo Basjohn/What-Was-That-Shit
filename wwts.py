@@ -93,7 +93,6 @@ class WWTSApp:
         if self.settings.get("save_history", False):
             # Ensure the folder exists
             os.makedirs(self.settings.history_folder, exist_ok=True)
-            logging.warning(f"Using history folder: {self.settings.history_folder}")
             
             # Create the history manager
             self.history_manager = HistoryManager(self.settings.history_folder)
@@ -127,7 +126,10 @@ class WWTSApp:
     def init_monitoring(self):
         """Initialize clipboard monitoring."""
         try:
-            # Create clipboard monitor if it doesn't exist
+            # Import the ClipboardMonitor class here to ensure any errors are caught
+            # Skip clipboard operations for direct captures entirely
+            # This prevents File Explorer crashes on double shift capture
+            # The image will still be displayed in the overlay
             if not self.clipboard_monitor:
                 self.clipboard_monitor = ClipboardMonitor(self.settings)
                 
@@ -137,12 +139,13 @@ class WWTSApp:
                 # Connect the direct capture signal
                 self.clipboard_monitor.image_captured.connect(self.on_direct_capture)
                 
-                # Start monitoring
-                self.clipboard_monitor.start()
-                logging.warning("Clipboard monitoring started")
+                # Don't start monitoring here - it will be started in the start() method
+                logging.info("Clipboard monitor initialized successfully")
             
         except Exception as e:
             logging.error(f"Error initializing clipboard monitoring: {e}")
+            # Explicitly set to None to make it clear it failed
+            self.clipboard_monitor = None
     
     def connect_signals(self):
         """Connect signals to slots (unused - signals are connected where components are initialized)"""
@@ -150,8 +153,23 @@ class WWTSApp:
     
     def start(self):
         """Start the application"""
-        # Start clipboard monitoring
-        self.clipboard_monitor.start()
+        # Start clipboard monitoring if it was initialized successfully
+        if self.clipboard_monitor is not None:
+            try:
+                self.clipboard_monitor.start()
+                logging.info("Clipboard monitoring started successfully")
+            except Exception as e:
+                logging.error(f"Error starting clipboard monitor: {e}")
+        else:
+            logging.warning("Clipboard monitor was not initialized, some features may not work")
+        
+        # Always show the overlay when the app starts
+        if self.overlay:
+            try:
+                self.overlay.show()
+                logging.info("Overlay shown at startup")
+            except Exception as e:
+                logging.error(f"Error showing overlay at startup: {e}")
         
         # Show settings window if not starting minimized
         if not self.settings.get("minimize_on_startup", False):
@@ -224,6 +242,9 @@ class WWTSApp:
                 # Make sure we're on the main thread
                 self.app.processEvents()
                 
+                # NOTE: Clipboard operations are now handled in clipboard_monitor._emit_image_captured_signal
+                # to match the WWTSDRAW implementation which doesn't have COM issues
+                
                 # Save to history if enabled
                 if self.settings.get("save_history", False):
                     # Ensure history manager is initialized
@@ -253,6 +274,9 @@ class WWTSApp:
                 if not self.overlay.isVisible():
                     self.overlay.show()
                     self.overlay.raise_()
+                    
+                # No COM cleanup needed - we're using the same approach as WWTSDRAW
+                # which handles clipboard operations in the monitor class
         except Exception as e:
             logging.error(f"Error handling direct capture: {e}")
     
@@ -371,5 +395,12 @@ class WWTSApp:
         self.app.quit()
 
 if __name__ == "__main__":
-    app = WWTSApp()
-    sys.exit(app.start())
+    try:
+        app = WWTSApp()
+        exit_code = app.start()
+        logging.info(f"Application exiting with code: {exit_code}")
+        sys.exit(exit_code)
+    except Exception as e:
+        logging.critical(f"Unhandled exception in main thread: {e}")
+        logging.critical(traceback.format_exc())
+        sys.exit(1)
