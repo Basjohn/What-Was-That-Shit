@@ -4,7 +4,7 @@ import logging
 import ctypes
 from pathlib import Path
 from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QSystemTrayIcon
-from PyQt5.QtCore import Qt, QStandardPaths, QTimer
+from PyQt5.QtCore import Qt, QStandardPaths, QTimer, QBuffer
 from PyQt5.QtGui import QIcon, QPixmap, QImage
 from PIL import Image, ImageGrab
 import io
@@ -223,6 +223,28 @@ class WWTSApp:
                 
                 # Make sure we're on the main thread
                 self.app.processEvents()
+                
+                # Save to history if enabled
+                if self.settings.get("save_history", False):
+                    # Ensure history manager is initialized
+                    if not self.history_manager:
+                        if not self._init_history_manager():
+                            logging.error("Failed to initialize history manager")
+                    
+                    if self.history_manager:
+                        try:
+                            # Convert QImage to PIL Image for saving
+                            buffer = QBuffer()
+                            buffer.open(QBuffer.ReadWrite)
+                            qimage.save(buffer, "PNG")
+                            pil_image = Image.open(io.BytesIO(buffer.data()))
+                            pil_image.format = "PNG"
+                            
+                            # Save the image
+                            file_path = self.history_manager.save_image(pil_image, "png")
+                            logging.warning(f"Direct capture saved to history: {file_path}")
+                        except Exception as save_error:
+                            logging.error(f"Error saving direct capture to history: {save_error}")
                 
                 # Send QImage directly to overlay
                 self.overlay.set_qimage(qimage)
