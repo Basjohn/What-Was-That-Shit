@@ -2,6 +2,8 @@ import logging
 import os
 import subprocess
 import platform
+import time
+import sqlite3
 from pathlib import Path
 from PyQt5.QtCore import (
     Qt, QTimer, QSize, QPoint, QEvent, QPropertyAnimation, 
@@ -9,30 +11,81 @@ from PyQt5.QtCore import (
     QUrl
 )
 from PyQt5.QtGui import (
-    QColor, QPalette, QDesktopServices, QPixmap, QPainter, QIcon
+    QColor, QPalette, QDesktopServices, QPixmap, QPainter, QIcon, QFont
 )
 from PyQt5.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, 
+    QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QCheckBox, 
     QSlider, QComboBox, QPushButton, QGroupBox, QFormLayout,
     QFileDialog, QToolTip, QWidget, QSpacerItem, QSizePolicy,
     QFrame, QGraphicsOpacityEffect, QApplication, QMessageBox, QLineEdit, QSpinBox,
-    QTextBrowser
+    QTextBrowser, QStyle, QStyleOption, QMainWindow
 )
 
-class SettingsWindow(QDialog):
+class BorderedDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        
+        # Create a central widget to hold the content
+        self.central_widget = QWidget(self)
+        self.central_widget.setObjectName("central_widget")
+        
+        # Main layout for the central widget
+        self.main_layout = QVBoxLayout(self.central_widget)
+        self.main_layout.setContentsMargins(2, 2, 2, 2)  # Make room for the border
+        
+        # Set the central widget
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.central_widget)
+        
+        # For window dragging
+        self.dragging = False
+        self.drag_position = None
+    
+    def paintEvent(self, event):
+        """Handle custom painting."""
+        opt = QStyleOption()
+        opt.initFrom(self)
+        painter = QPainter(self)
+        self.style().drawPrimitive(QStyle.PE_Widget, opt, painter, self)
+        super().paintEvent(event)
+
+
+class SettingsWindow(BorderedDialog):
     def __init__(self, settings, overlay=None, parent=None):
+        # Initialize the parent class with the parent parameter
         super().__init__(parent)
         self.settings = settings
         self.overlay = overlay
+        
+        # Set the settings window reference in the overlay
+        if self.overlay:
+            self.overlay.settings_window = self
+            
         # Remove the default titlebar and context help button
         self.setWindowFlags(Qt.FramelessWindowHint)
         self.setResult(0)
+        
+        # Tooltip delay is controlled by the system, we'll keep the default
+        # Set initial window style with border and semi-transparent background
+        self.setStyleSheet("""
+            QDialog {
+                background-color: rgba(45, 45, 48, 0.8);
+                border: 2px solid white;
+                border-radius: 5px;
+            }
+        """)
+        
         self.init_ui()
         self.load_settings()
         
         # For window dragging
         self.dragging = False
         self.drag_position = None
+    
+    # Paint event is now handled by BorderedDialog
         
     def init_ui(self):
         """Initialize the UI components."""
@@ -41,11 +94,10 @@ class SettingsWindow(QDialog):
         # Set theme based on settings
         self.apply_theme(self.settings.get("theme", "dark"))
         
-        # Main layout
-        main_layout = QVBoxLayout()
+        # Main layout is already set up in BorderedDialog
+        main_layout = self.main_layout
         main_layout.setSpacing(15)
         main_layout.setContentsMargins(20, 20, 20, 20)
-        self.setLayout(main_layout)
         
         # Create custom title bar with close button
         title_bar = self.create_custom_title_bar()
@@ -65,6 +117,25 @@ class SettingsWindow(QDialog):
         
         # Set dialog to non-modal
         self.setModal(False)
+        
+        # Restore window position from settings
+        try:
+            x = self.settings.get("settings_window_x", None)
+            y = self.settings.get("settings_window_y", None)
+            
+            if x is not None and y is not None:
+                # Ensure the window is visible on screen
+                desktop = QApplication.desktop()
+                screen_rect = desktop.availableGeometry(desktop.primaryScreen())
+                
+                # Make sure the position is within screen bounds
+                if x >= 0 and x < screen_rect.width() - 100 and y >= 0 and y < screen_rect.height() - 100:
+                    self.move(x, y)
+                    logging.info(f"Restored settings window position: {x}, {y}")
+                else:
+                    logging.warning(f"Saved position ({x}, {y}) is outside screen bounds, using default position")
+        except Exception as e:
+            logging.error(f"Error restoring settings window position: {e}")
     
     def create_custom_title_bar(self):
         """Create a custom title bar with close button."""
@@ -76,7 +147,7 @@ class SettingsWindow(QDialog):
         # Use horizontal layout for the title bar
         title_layout = QHBoxLayout(title_bar)
         title_layout.setContentsMargins(20, 0, 15, 0)  # Added more left padding
-        title_layout.setSpacing(10)
+        title_layout.setSpacing(1)  # Reduced from 10 to 1 for tighter grouping
         
         # Title text - left aligned with moderate padding
         title_text = QLabel("What Was That Shit?!")
@@ -123,8 +194,18 @@ class SettingsWindow(QDialog):
         """Apply a dark theme to the entire UI."""
         self.setStyleSheet("""
             QDialog {
+                background-color: rgba(45, 45, 48, 0.9);
+                border: 2px solid white;
+                border-radius: 5px;
+                color: #FFFFFF;
+            }
+            
+            QToolTip {
                 background-color: #2D2D30;
                 color: #FFFFFF;
+                border: 1px solid #3F3F46;
+                padding: 5px;
+                border-radius: 3px;
             }
             QGroupBox {
                 background-color: #333337;
@@ -263,8 +344,18 @@ class SettingsWindow(QDialog):
         """Apply a light theme to the entire UI (inverted dark theme)."""
         self.setStyleSheet("""
             QDialog {
-                background-color: #D2D2CF;
+                background-color: rgba(210, 210, 207, 0.9);
+                border: 2px solid #333333;
+                border-radius: 5px;
                 color: #000000;
+            }
+            
+            QToolTip {
+                background-color: #F0F0F0;
+                color: #000000;
+                border: 1px solid #A0A0A0;
+                padding: 5px;
+                border-radius: 3px;
             }
             QGroupBox {
                 background-color: #CCCCC8;
@@ -407,6 +498,30 @@ class SettingsWindow(QDialog):
         else:
             # Default to dark theme
             self.apply_dark_theme()
+        
+        # Apply tooltip styles that work with the current theme
+        tooltip_style = """
+            QToolTip {
+                padding: 5px;
+                border-radius: 3px;
+                opacity: 230;
+        """
+        
+        if theme_name == "light":
+            tooltip_style += """
+                background-color: #F0F0F0;
+                color: #000000;
+                border: 1px solid #A0A0A0;
+            """
+        else:
+            tooltip_style += """
+                background-color: #2D2D30;
+                color: #FFFFFF;
+                border: 1px solid #3F3F46;
+            """
+        
+        tooltip_style += "}"
+        self.setStyleSheet(self.styleSheet() + tooltip_style)
             
         # Update any theme-specific elements that aren't handled by stylesheets
         self.update_theme_specific_elements(theme_name)
@@ -436,6 +551,27 @@ class SettingsWindow(QDialog):
                 # Dark grey background for dark theme with black border
                 self.overlay.setStyleSheet("background-color: #252525; border: 3px solid #000000;")
     
+    def _get_section_style(self):
+        """Return the stylesheet for section group boxes."""
+        return """
+            QGroupBox {
+                border: 1.5px solid #666666;
+                border-radius: 6px;
+                margin-top: 10px;
+                padding-top: 20px;
+                padding-bottom: 5px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 15px;
+                padding: 2px 10px;
+                background-color: #3a3a3a;
+                border: 1.5px solid #666666;
+                border-radius: 8px;
+                color: #ffffff;
+            }
+        """
+
     def create_monitoring_section(self, parent_layout):
         """Create the monitoring settings section."""
         monitor_frame = QFrame()
@@ -444,22 +580,28 @@ class SettingsWindow(QDialog):
         # Settings on the left
         monitor_settings = QFrame()
         settings_layout = QVBoxLayout(monitor_settings)
+        settings_layout.setContentsMargins(0, 0, 0, 0)  # Remove any default margins
         
         group_box = QGroupBox("Monitoring")
-        # Remove the hardcoded color styling, will be handled by the theme
+        group_box.setStyleSheet(self._get_section_style())
         layout = QVBoxLayout()
-        layout.setSpacing(10)
+        layout.setSpacing(1)  # Reduced from 10 to 1 for tighter grouping
+        layout.setContentsMargins(15, 15, 15, 15)
         
         # PrintScreen monitoring
         self.monitor_print_screen_checkbox = QCheckBox("Monitor Print Screen")
+        self.monitor_print_screen_checkbox.setToolTip("Does nothing because it all enters the clipboard anyway")
         layout.addWidget(self.monitor_print_screen_checkbox)
         
         # Ctrl+C monitoring
         self.monitor_ctrl_c_checkbox = QCheckBox("Monitor Ctrl+C")
+        self.monitor_ctrl_c_checkbox.setToolTip("Why did I even make this optional?")
         layout.addWidget(self.monitor_ctrl_c_checkbox)
         
         # Auto refresh
         self.auto_refresh_checkbox = QCheckBox("Auto-Refresh Overlay On Clipboard Change")
+        self.auto_refresh_checkbox.setObjectName("autoRefreshCheckbox")  # Add object name for reference
+        self.auto_refresh_checkbox.setToolTip("Core feature that changes overlay images for you")
         layout.addWidget(self.auto_refresh_checkbox)
         
         # Minimize on startup
@@ -512,8 +654,9 @@ class SettingsWindow(QDialog):
     def create_overlay_section(self, parent_layout):
         """Create the overlay settings section."""
         group_box = QGroupBox("Overlay")
+        group_box.setStyleSheet(self._get_section_style())
         layout = QVBoxLayout()
-        layout.setSpacing(10)
+        layout.setSpacing(1)  # Reduced from 10 to 1 for tighter grouping
         layout.setContentsMargins(15, 15, 15, 15)
         
         # Resize options
@@ -522,6 +665,7 @@ class SettingsWindow(QDialog):
         # Resize image to fit window
         self.resize_image_checkbox = QCheckBox("Resize Image To Fit Window")
         self.resize_image_checkbox.setChecked(self.settings.get("resize_image_to_fit", True))
+        self.resize_image_checkbox.setToolTip("You don't wanna change this, you really don't.")
         layout.addWidget(self.resize_image_checkbox)
         
         # Scroll Wheel Resize option
@@ -537,7 +681,7 @@ class SettingsWindow(QDialog):
         # Video Aware Capture option
         self.video_aware_capture_checkbox = QCheckBox("Save Entire Video Frames With Double Shift")
         self.video_aware_capture_checkbox.setChecked(self.settings.get("video_aware_capture", False))
-        self.video_aware_capture_checkbox.setToolTip("Experimental, aka it won't work for shit yet.")
+        self.video_aware_capture_checkbox.setToolTip("When enabled, automatically detects video players and captures the entire video frame")
         # Connect the stateChanged signal to a handler that will also check the double shift checkbox
         self.video_aware_capture_checkbox.stateChanged.connect(self.on_video_aware_changed)
         layout.addWidget(self.video_aware_capture_checkbox)
@@ -545,14 +689,16 @@ class SettingsWindow(QDialog):
         # Draw Capture Frame option
         self.draw_capture_frame_checkbox = QCheckBox("Draw Capture Frame")
         self.draw_capture_frame_checkbox.setChecked(self.settings.get("draw_capture_frame", False))
-        self.draw_capture_frame_checkbox.setToolTip("When enabled, shows a blue outline around the area being captured with double shift for 0.3 seconds")
+        self.draw_capture_frame_checkbox.setToolTip("Requires restart!\n\nWhen enabled, shows a blue outline around the area being captured with double shift for 0.3 seconds")
         layout.addWidget(self.draw_capture_frame_checkbox)
         
         # Double-shift capture size
         capture_size_layout = QHBoxLayout()
         
-        # Add a "Double-shift capture size:" label
-        capture_size_layout.addWidget(QLabel("Double-Shift Capture Size:"))
+        # Add a "Double-shift capture size:" label with tooltip
+        capture_size_label = QLabel("Double-Shift Capture Size:")
+        capture_size_label.setToolTip("Set this especially large if you want to focus on video frames.")
+        capture_size_layout.addWidget(capture_size_label)
         
         # Height input
         self.capture_height_input = QSpinBox()
@@ -578,6 +724,7 @@ class SettingsWindow(QDialog):
         # Clickthrough option
         self.clickthrough_checkbox = QCheckBox("Allow Clicks To Pass Through Overlay")
         self.clickthrough_checkbox.setChecked(self.settings.get("clickthrough", False))
+        self.clickthrough_checkbox.setToolTip("Requires Restart And Produces Naught But Sadness")
         layout.addWidget(self.clickthrough_checkbox)
         
         # Opacity
@@ -590,9 +737,29 @@ class SettingsWindow(QDialog):
         self.opacity_slider.setTickPosition(QSlider.TicksBelow)
         self.opacity_slider.setTickInterval(10)
         self.opacity_slider.valueChanged.connect(self.update_opacity_label)
+        self.opacity_slider.setStyleSheet("""
+            QSlider::groove:horizontal {
+                border: 1px solid #666666;
+                height: 5px;
+                background: #444444;
+                margin: 0px;
+                border-radius: 2px;
+            }
+            QSlider::handle:horizontal {
+                background: #ffffff;
+                border: 1px solid #666666;
+                width: 14px;
+                margin: -5px 0;
+                border-radius: 7px;
+            }
+            QSlider::handle:horizontal:hover {
+                background: #f0f0f0;
+            }
+        """)
         opacity_layout.addWidget(self.opacity_slider)
         
         self.opacity_value_label = QLabel(f"{self.opacity_slider.value()}%")
+        self.opacity_value_label.setMinimumWidth(40)  # Ensure consistent width for the percentage
         opacity_layout.addWidget(self.opacity_value_label)
         
         layout.addLayout(opacity_layout)
@@ -603,8 +770,9 @@ class SettingsWindow(QDialog):
     def create_theme_section(self, parent_layout):
         """Create the theme settings section."""
         group_box = QGroupBox("Theme")
+        group_box.setStyleSheet(self._get_section_style())
         layout = QVBoxLayout()
-        layout.setSpacing(10)
+        layout.setSpacing(1)  # Reduced from 10 to 1 for tighter grouping
         layout.setContentsMargins(15, 15, 15, 15)
         
         # Theme Selection
@@ -635,8 +803,9 @@ class SettingsWindow(QDialog):
     def create_history_section(self, parent_layout):
         """Create the history settings section."""
         group_box = QGroupBox("History")
+        group_box.setStyleSheet(self._get_section_style())
         layout = QVBoxLayout()
-        layout.setSpacing(10)
+        layout.setSpacing(1)  # Reduced from 10 to 1 for tighter grouping
         layout.setContentsMargins(15, 15, 15, 15)
         
         # Save to history checkbox
@@ -664,6 +833,12 @@ class SettingsWindow(QDialog):
         self.open_history_button.setCursor(Qt.PointingHandCursor)
         self.open_history_button.clicked.connect(self.open_history_folder)
         folder_layout.addWidget(self.open_history_button)
+        
+        # Add "Sort" button
+        self.sort_history_button = QPushButton("Sort")
+        self.sort_history_button.setCursor(Qt.PointingHandCursor)
+        self.sort_history_button.clicked.connect(self.sort_history_files)
+        folder_layout.addWidget(self.sort_history_button)
         
         # Add a stretch to push everything to the left
         folder_layout.addStretch(1)
@@ -699,21 +874,478 @@ class SettingsWindow(QDialog):
             logging.error(f"Error calculating folder size: {e}")
             return "0.00 GB"
     
+    def _create_styled_message_box(self, title, message, icon=QMessageBox.Information):
+        """Create a styled message box with no title bar and thin white border."""
+        msg = QMessageBox()
+        msg.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        msg.setStyleSheet("""
+            QMessageBox {
+                background-color: #2d2d2d;
+                border: 1px solid white;
+                color: white;
+            }
+            QLabel {
+                color: white;
+                padding: 10px;
+            }
+            QPushButton {
+                background-color: #3e3e3e;
+                color: white;
+                border: 1px solid #555;
+                padding: 5px 15px;
+                min-width: 80px;
+            }
+            QPushButton:hover {
+            }
+        """)
+        msg.setIcon(icon)
+        msg.setText(message)
+        msg.setWindowTitle(title)
+        return msg
+
+    def _unload_current_image(self):
+        """
+        Completely unload the current image from the overlay, ensuring all resources are released.
+        This is important before performing file operations on the image files.
+        """
+        if not hasattr(self, 'overlay'):
+            return
+            
+        try:
+            # Clear any animation timers first
+            if hasattr(self.overlay, 'animation_timer') and self.overlay.animation_timer.isActive():
+                self.overlay.animation_timer.stop()
+            
+            # Clear GIF frames if they exist
+            if hasattr(self.overlay, 'gif_frames'):
+                self.overlay.gif_frames = []
+                
+            # Clear the current image and pixmap
+            if hasattr(self.overlay, 'original_image'):
+                self.overlay.original_image = None
+                
+            if hasattr(self.overlay, 'pixmap'):
+                self.overlay.pixmap = None
+                
+            # Clear the image label safely
+            if hasattr(self.overlay, 'image_label') and self.overlay.image_label:
+                try:
+                    self.overlay.image_label.clear()
+                    # Create an empty QPixmap instead of passing None
+                    from PyQt5.QtGui import QPixmap
+                    empty_pixmap = QPixmap()
+                    self.overlay.image_label.setPixmap(empty_pixmap)
+                except Exception as e:
+                    logging.debug(f"Error clearing image label: {e}")
+            
+            # Clear the current file path
+            if hasattr(self.overlay, 'current_file_path'):
+                self.overlay.current_file_path = None
+            
+            # Force garbage collection
+            import gc
+            gc.collect()
+            
+            # Force update the display multiple times to ensure all events are processed
+            for _ in range(3):
+                QApplication.processEvents()
+                time.sleep(0.1)
+                
+        except Exception as e:
+            logging.error(f"Error in _unload_current_image: {e}")
+            # Don't re-raise the exception to prevent crashes during sorting
+            pass
+    
+    def _get_sorted_files(self, history_folder):
+        """Get all files in the history folder sorted by their numerical prefix.
+        
+        Returns:
+            List of tuples: (dir_path, counter, _, extension, is_temporary, full_path)
+            Note: The third element is kept for backward compatibility but will be None
+        """
+        import re
+        
+        files = []
+        total_files = 0
+        matched_files = 0
+        
+        logging.info(f"Scanning for files in: {history_folder}")
+        
+        for root, _, filenames in os.walk(history_folder):
+            # Skip temporary sort directories
+            if 'wwts_sort_' in root:
+                continue
+                
+            for filename in filenames:
+                total_files += 1
+                base_name, ext = os.path.splitext(filename)
+                ext = ext.lower().lstrip('.')
+                
+                # Skip non-image files
+                if ext not in ('png', 'jpg', 'jpeg', 'gif', 'bmp'):
+                    continue
+                
+                # Check if it's a temporary file
+                is_temporary = base_name.endswith('_T')
+                if is_temporary:
+                    base_name = base_name[:-2]  # Remove _T suffix
+                
+                # Extract counter (should be the entire base_name if it's a number)
+                counter = 0
+                try:
+                    counter = int(base_name)
+                except ValueError:
+                    # If not a number, assign a high number to put it at the end
+                    counter = 9999 + total_files
+                
+                full_path = os.path.join(root, filename)
+                files.append((root, counter, None, ext, is_temporary, full_path))
+                matched_files += 1
+        
+        logging.info(f"Found {matched_files} matching files out of {total_files} total files")
+        
+        # Sort by counter to maintain original order
+        files.sort(key=lambda x: x[1])
+        return files
+    
+    def _safe_rename(self, src, dst, max_attempts=3, delay=0.5):
+        """Safely rename a file with retries and error handling."""
+        import shutil
+        import time
+        
+        attempts = 0
+        last_error = None
+        
+        while attempts < max_attempts:
+            try:
+                # Try to rename the file
+                if os.path.exists(dst):
+                    # If destination exists, remove it first
+                    if os.path.isfile(dst):
+                        os.unlink(dst)
+                    else:
+                        shutil.rmtree(dst)
+                
+                # Perform the rename
+                os.rename(src, dst)
+                return True
+                
+            except (OSError, PermissionError, IOError) as e:
+                last_error = e
+                attempts += 1
+                if attempts < max_attempts:
+                    time.sleep(delay)
+                    # Force garbage collection and process events between attempts
+                    import gc
+                    gc.collect()
+                    QApplication.processEvents()
+        
+        logging.error(f"Failed to rename {src} to {dst} after {max_attempts} attempts: {last_error}")
+        return False
+
+    def _rename_files_with_sequential_numbers(self, files):
+        """Rename files with sequential numbers in the format 0000.filetype
+        
+        Args:
+            files: List of tuples containing (dir_path, counter, random_suffix, ext, is_temporary, old_path)
+            
+        Returns:
+            List of tuples (old_path, new_path) for all renamed files
+        """
+        import shutil
+        
+        renamed_files = []
+        seen_paths = set()
+        
+        # First pass: Generate all target paths and check for conflicts
+        path_mapping = {}
+        
+        for idx, (dir_path, _, _, ext, is_temporary, old_path) in enumerate(files):
+            # Skip temporary files that should be deleted
+            if is_temporary:
+                continue
+                
+            # Generate new filename with sequential number (0000.filetype format)
+            new_filename = f"{idx:04d}.{ext}"
+            new_path = os.path.join(dir_path, new_filename)
+            
+            # If the file is already in the right place, skip it
+            if os.path.normpath(old_path) == os.path.normpath(new_path):
+                seen_paths.add(new_path.lower())
+                continue
+                
+            # Make sure we don't have duplicate target paths
+            if new_path.lower() in seen_paths:
+                # If we hit a duplicate, find the next available number
+                counter = idx + 1
+                while True:
+                    new_filename = f"{counter:04d}.{ext}"
+                    new_path = os.path.join(dir_path, new_filename)
+                    if not os.path.exists(new_path) and new_path.lower() not in seen_paths:
+                        break
+                    counter += 1
+                    if counter > 9999:
+                        raise RuntimeError("Maximum number of files (9999) reached in the directory")
+            
+            seen_paths.add(new_path.lower())
+            path_mapping[old_path] = new_path
+        
+        # Second pass: Perform the renames in a safe way
+        for old_path, new_path in path_mapping.items():
+            try:
+                # If target exists and is different from source, handle it
+                if os.path.exists(new_path) and os.path.normpath(old_path) != os.path.normpath(new_path):
+                    # If it's the same file (case-insensitive), skip it
+                    if old_path.lower() == new_path.lower():
+                        continue
+                        
+                    # Otherwise, generate a temporary name in the same directory
+                    temp_path = f"{new_path}.tmp"
+                    counter = 1
+                    while os.path.exists(temp_path):
+                        temp_path = f"{new_path}.{counter}.tmp"
+                        counter += 1
+                    
+                    # Move the existing file out of the way
+                    shutil.move(new_path, temp_path)
+                    
+                    try:
+                        # Now move the new file into place
+                        shutil.move(old_path, new_path)
+                        renamed_files.append((old_path, new_path))
+                        
+                        # If we successfully moved the new file, remove the old one
+                        try:
+                            os.remove(temp_path)
+                        except OSError as e:
+                            logging.warning(f"Could not remove temporary file {temp_path}: {e}")
+                            
+                    except Exception as e:
+                        # If moving the new file failed, restore the old one
+                        logging.error(f"Error moving {old_path} to {new_path}: {e}")
+                        if os.path.exists(temp_path):
+                            shutil.move(temp_path, new_path)
+                        continue
+                else:
+                    # No conflict, just rename the file
+                    try:
+                        shutil.move(old_path, new_path)
+                        renamed_files.append((old_path, new_path))
+                    except Exception as e:
+                        logging.error(f"Error moving {old_path} to {new_path}: {e}")
+                        continue
+                        
+            except Exception as e:
+                logging.error(f"Error processing {old_path}: {e}")
+                continue
+                
+        return renamed_files
+    def sort_history_files(self):
+        """Sort and rename history files to ensure sequential numbering."""
+        import tempfile
+        import shutil
+        import time
+        
+        # Track the current image path before sorting to reload it after
+        current_image_path = None
+        if hasattr(self, 'overlay') and hasattr(self.overlay, 'current_file_path') and self.overlay.current_file_path:
+            current_image_path = self.overlay.current_file_path
+            logging.info(f"Tracking current image for reload: {current_image_path}")
+        
+        # Check if history folder exists
+        if not os.path.exists(self.settings.history_folder):
+            msg = self._create_styled_message_box("Error", "History folder does not exist.")
+            msg.exec_()
+            return
+            
+        # Check if we have access to overlay and history_db
+        if not hasattr(self, 'overlay') or not hasattr(self.overlay, 'history_db') or not self.overlay.history_db:
+            msg = self._create_styled_message_box(
+                "Error", 
+                "Could not access history database.\nPlease ensure history is enabled in settings.",
+                QMessageBox.Warning
+            )
+            msg.exec_()
+            return
+        
+        # Close any existing database connection
+        if hasattr(self.overlay.history_db, '_connection') and self.overlay.history_db._connection:
+            try:
+                self.overlay.history_db._connection.close()
+            except Exception as e:
+                logging.error(f"Error closing existing connection: {e}")
+            self.overlay.history_db._connection = None
+            
+        # Get database connection for the operation
+        conn = None
+        cursor = None
+        renamed_files = []
+        
+        try:
+            conn = self.overlay.history_db._get_connection()
+            cursor = conn.cursor()
+            cursor.execute('BEGIN TRANSACTION')
+
+            # Get all files, ordered by timestamp
+            cursor.execute('''
+                SELECT id, file_path, is_temporary 
+                FROM images 
+                WHERE is_temporary = 0 OR ? = 1
+                ORDER BY timestamp
+            ''', (int(self.save_history_checkbox.isChecked()),))
+
+            db_files = cursor.fetchall()
+
+            if not db_files:
+                conn.rollback()
+                msg = self._create_styled_message_box("Sort Complete", "No files to sort in the database.")
+                msg.exec_()
+                return
+
+            # Get all files from the filesystem
+            sorted_files = self._get_sorted_files(self.settings.history_folder)
+
+            if not sorted_files:
+                conn.rollback()
+                msg = self._create_styled_message_box("Sort Complete", "No files found to sort.")
+                msg.exec_()
+                return
+
+            # Rename files with sequential numbers
+            renamed_files = self._rename_files_with_sequential_numbers(sorted_files)
+
+            if not renamed_files:
+                conn.rollback()
+                msg = self._create_styled_message_box("Sort Complete", "No files needed to be renamed.")
+                msg.exec_()
+                return
+
+            # Update the database with new file paths
+            for old_path, new_path in renamed_files:
+                try:
+                    cursor.execute('''
+                        UPDATE images 
+                        SET file_path = ? 
+                        WHERE file_path = ?
+                    ''', (new_path, old_path))
+                except sqlite3.Error as e:
+                    logging.error(f"Error updating database for {old_path}: {e}")
+
+            # Commit all changes
+            conn.commit()
+
+            # Reload the current image if there was one
+            if current_image_path:
+                # Find the new path for the current image
+                for old_path, new_path in renamed_files:
+                    if old_path == current_image_path:
+                        current_image_path = new_path
+                        break
+
+                # Try to reload the image
+                if hasattr(self.overlay, 'load_image'):
+                    try:
+                        self.overlay.load_image(current_image_path)
+                    except Exception as e:
+                        logging.error(f"Error reloading image: {e}")
+
+            # Show success message
+            msg = self._create_styled_message_box(
+                "Sort Complete", 
+                f"Successfully renamed {len(renamed_files)} files."
+            )
+            msg.exec_()
+
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            logging.error(f"Error during sort operation: {e}")
+            msg = self._create_styled_message_box(
+                "Sort Error", 
+                f"An error occurred during sorting: {str(e)}",
+                QMessageBox.Critical
+            )
+            msg.exec_()
+
+        finally:
+            # Ensure connection is closed
+            if 'conn' in locals() and conn:
+                try:
+                    conn.close()
+                except Exception as e:
+                    logging.warning(f"Error closing connection: {e}")
+            
+            # Ensure temp directory is cleaned up
+            if 'temp_dir' in locals() and temp_dir and os.path.exists(temp_dir):
+                try:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                except Exception as cleanup_error:
+                    logging.warning(f"Failed to clean up temporary directory on error: {cleanup_error}")
+            
+            # Clean up any remaining temporary files
+            if 'path_mapping' in locals() and 'temp_dir' in locals():
+                self._cleanup_temp_files(path_mapping, temp_dir)
+
+    def _cleanup_temp_files(self, path_mapping, temp_dir):
+        """Clean up temporary files and directories after an error."""
+        try:
+            # Remove all files in the temp directory
+            for file_id, (temp_path, new_path, _) in path_mapping.items():
+                if os.path.exists(temp_path):
+                    try:
+                        os.remove(temp_path)
+                    except Exception as e:
+                        logging.error(f"Error removing temp file {temp_path}: {e}")
+            
+            # Remove the temp directory if empty
+            try:
+                os.rmdir(temp_dir)
+            except:
+                pass
+        except Exception as e:
+            logging.error(f"Error during temp file cleanup: {e}")
+
+    def _restore_files(self, path_mapping, updated_paths, temp_dir):
+        """Attempt to restore files to their original locations after a failed sort operation."""
+        try:
+            # First, move any updated files back to their temp locations
+            for file_id, new_path in updated_paths.items():
+                if file_id in path_mapping:
+                    temp_path = path_mapping[file_id][0]
+                    if os.path.exists(new_path) and not os.path.exists(temp_path):
+                        if not self._copy_file(new_path, temp_path):
+                            logging.error(f"Failed to restore {new_path} to {temp_path}")
+            
+            # Then move all files back to their original locations
+            for file_id, (temp_path, new_path, _) in path_mapping.items():
+                if os.path.exists(temp_path):
+                    old_path = path_mapping[file_id][1] if file_id in path_mapping else None
+                    if old_path and not os.path.exists(old_path):
+                        if not self._copy_file(temp_path, old_path):
+                            logging.error(f"Failed to restore {temp_path} to {old_path}")
+            
+            # Clean up temp directory if empty
+            self._cleanup_temp_files(path_mapping, temp_dir)
+                
+        except Exception as e:
+            logging.error(f"Error during file restoration: {e}")
+            self._cleanup_temp_files(path_mapping, temp_dir)
+    
     def update_history_size(self):
         """Update the history folder size label."""
         try:
-            # Get the history folder path directly from the settings object
+            # Get the history folder path using the property
             history_folder = self.settings.history_folder
             logging.info(f"Checking history folder size: {history_folder}")
             
-            if history_folder and os.path.exists(history_folder):
+            if os.path.exists(history_folder):
                 size = self.get_folder_size(history_folder)
                 self.history_folder_label.setText(f"{size}")
             else:
                 logging.warning(f"History folder does not exist: {history_folder}")
                 self.history_folder_label.setText("0.00 GB")
         except Exception as e:
-            logging.error(f"Error updating history size: {e}")
+            logging.error(f"Error checking history folder size: {e}")
             self.history_folder_label.setText("0.00 GB")
     
     def on_history_label_click(self, event):
@@ -727,28 +1359,30 @@ class SettingsWindow(QDialog):
         except Exception as e:
             logging.error(f"Error in history label click: {e}")
             # Fallback to simple text update
-            self.history_folder_label.setText("<b>YOU KNOW WHAT YOU DID</b>")
+            self.history_folder_label.setText("Error")
             QTimer.singleShot(2000, self.update_history_size)
     
     def open_history_folder(self):
         """Open the history folder in the file explorer."""
         try:
-            # Access the history_folder directly from the settings object
+            # Get the history folder path using the property
             history_folder = self.settings.history_folder
             logging.info(f"Opening history folder: {history_folder}")
             
-            if history_folder and os.path.exists(history_folder):
-                # Use the appropriate command based on the operating system
+            if os.path.exists(history_folder):
                 if platform.system() == "Windows":
                     os.startfile(history_folder)
                 elif platform.system() == "Darwin":  # macOS
                     subprocess.run(["open", history_folder])
-                else:  # Linux or other Unix-like
+                else:  # Linux and other Unix-like
                     subprocess.run(["xdg-open", history_folder])
             else:
                 logging.error(f"History folder does not exist: {history_folder}")
+                QMessageBox.warning(self, "Folder Not Found", 
+                                  "The history folder could not be found. It may have been moved or deleted.")
         except Exception as e:
             logging.error(f"Error opening history folder: {e}")
+            QMessageBox.critical(self, "Error", f"Could not open history folder: {e}")
     
     def update_opacity_label(self, value):
         """Update the opacity label and apply to overlay immediately."""
@@ -855,12 +1489,18 @@ class SettingsWindow(QDialog):
         if hasattr(self, 'scroll_wheel_resize_checkbox'):
             self.scroll_wheel_resize_checkbox.setChecked(True)
         if hasattr(self, 'double_shift_capture_checkbox'):
-            self.double_shift_capture_checkbox.setChecked(False)
+            self.double_shift_capture_checkbox.setChecked(True)  # Enable double-shift capture
+        if hasattr(self, 'video_aware_capture_checkbox'):
+            self.video_aware_capture_checkbox.setChecked(True)  # Enable video aware capture
+        if hasattr(self, 'draw_capture_frame_checkbox'):
+            self.draw_capture_frame_checkbox.setChecked(True)  # Enable draw capture frame
         if hasattr(self, 'clickthrough_checkbox'):
             self.clickthrough_checkbox.setChecked(False)
         if hasattr(self, 'opacity_slider'):
             self.opacity_slider.setValue(77)
-        self.theme_combo.setCurrentIndex(0)  # Dark
+        # Set theme to Dark (index 0 is Dark, 1 is Light, 2 is Auto)
+        self.theme_combo.setCurrentIndex(0)
+        self.apply_theme("dark")  # Ensure dark theme is applied immediately
         self.save_history_checkbox.setChecked(False)
         
     def minimize_to_tray(self):
@@ -880,24 +1520,12 @@ class SettingsWindow(QDialog):
         
     def closeEvent(self, event):
         """Handle window close event."""
-        try:
-            # Save window position
-            self.settings.set("settings_window_x", self.pos().x())
-            self.settings.set("settings_window_y", self.pos().y())
-            
-            # Clean up any UI resources
-            for child in self.findChildren(QWidget):
-                try:
-                    child.deleteLater()
-                except:
-                    pass
-            
-            # Clean up resources
-            self.deleteLater()
-            
-            logging.info("Settings window resources cleaned up")
-        except Exception as e:
-            logging.error(f"Error cleaning up settings window: {e}")
+        # Save window position
+        self.settings.set("settings_window_x", self.pos().x())
+        self.settings.set("settings_window_y", self.pos().y())
+        
+        # Clean up resources
+        self.deleteLater()
         
         # Accept the event
         event.accept()
@@ -944,6 +1572,21 @@ class SettingsWindow(QDialog):
         # Connect video aware capture checkbox to on_video_aware_changed
         if hasattr(self, 'video_aware_capture_checkbox'):
             self.video_aware_capture_checkbox.stateChanged.connect(self.on_video_aware_changed)
+            
+        # Connect auto-refresh checkbox to update the overlay's context menu
+        if hasattr(self, 'auto_refresh_checkbox'):
+            self.auto_refresh_checkbox.stateChanged.connect(self._on_auto_refresh_changed)
+    
+    def _on_auto_refresh_changed(self, state):
+        """Handle auto-refresh checkbox state change and update the overlay's context menu."""
+        if hasattr(self, 'overlay') and self.overlay:
+            # Get the current state from the checkbox
+            new_value = (state == Qt.Checked)
+            # Update the settings
+            self.settings.set("auto_refresh", new_value)
+            # Ensure the overlay's context menu is updated
+            if hasattr(self.overlay, '_update_context_menu'):
+                self.overlay._update_context_menu()
     
     def on_video_aware_changed(self, state):
         """Handle Video Aware Capture checkbox state change."""
@@ -989,7 +1632,6 @@ class SettingsWindow(QDialog):
     
     def show_about_dialog(self):
         """Show the about dialog."""
-        # Determine theme
         theme = self.settings.get("theme", "Dark")
         dark_theme = (theme == "Dark")
         dialog = AboutDialog(self, dark_theme)
@@ -1036,122 +1678,153 @@ class SettingsWindow(QDialog):
         parent_layout.addLayout(buttons_layout)
 
 class AboutDialog(QDialog):
-    """A frameless, themed dialog showing information about the application."""
+    """A themed dialog showing information about the application."""
     
     def __init__(self, parent=None, dark_theme=True):
-        super().__init__(parent, Qt.FramelessWindowHint)
+        super().__init__(parent, Qt.Window | Qt.WindowTitleHint | Qt.WindowCloseButtonHint)
         self.dark_theme = dark_theme
-        self.setFixedSize(550, 400)  # Made wider and taller
+        self.setFixedSize(450, 400)
         
-        # Very simple styling approach - use stylesheet only with important to override any conflicts
-        if dark_theme:
-            self.setStyleSheet("""
-                QDialog {
-                    background-color: #252525 !important;
-                    color: white !important;
-                    border: 2px solid #444 !important;
-                }
-                QLabel {
-                    color: white !important;
-                }
-                QPushButton {
-                    background-color: #444 !important;
-                    color: white !important;
-                    border-radius: 5px !important;
-                    border: 1px solid #555 !important;
-                    padding: 5px !important;
-                }
-                QPushButton:hover {
-                    background-color: #555 !important;
-                }
-            """)
-        else:
-            self.setStyleSheet("""
-                QDialog {
-                    background-color: #F0F0F0 !important;
-                    color: black !important;
-                    border: 2px solid #CCC !important;
-                }
-                QLabel {
-                    color: black !important;
-                }
-                QPushButton {
-                    background-color: #DDD !important;
-                    color: black !important;
-                    border-radius: 5px !important;
-                    border: 1px solid #BBB !important;
-                    padding: 5px !important;
-                }
-                QPushButton:hover {
-                    background-color: #CCC !important;
-                }
-            """)
+        # Set window title
+        self.setWindowTitle("About WWTS")
+        
+        # Main layout
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
+        
+        # Apply theme
+        self.apply_theme()
+        
+        # Initialize UI
+        self.init_ui()
         
         # Center on parent
         if parent:
             self.move(parent.x() + parent.width()//2 - self.width()//2,
                      parent.y() + parent.height()//2 - self.height()//2)
+    
+    def apply_theme(self):
+        """Apply the current theme to the dialog."""
+        if self.dark_theme:
+            # Set dark theme with explicit colors
+            style = """
+                QDialog {
+                    background-color: #2d2d2d;
+                    color: white;
+
+                }
+                QLabel {
+                    color: white;
+                }
+                QPushButton {
+                    background-color: #3e3e3e;
+                    color: white;
+                    border: 1px solid #555555;
+                    padding: 5px 10px;
+                    min-width: 80px;
+                }
+                QPushButton:hover {
+                    background-color: #4a4a4a;
+                }
+                QPushButton:pressed {
+                    background-color: #333333;
+                }
+            """
+            self.setStyleSheet(style)
+            
+            # Set palette for better color consistency
+            palette = self.palette()
+            palette.setColor(palette.Window, QColor(45, 45, 45))
+            palette.setColor(palette.WindowText, Qt.white)
+            palette.setColor(palette.Button, QColor(62, 62, 62))
+            palette.setColor(palette.ButtonText, Qt.white)
+            palette.setColor(palette.Text, Qt.white)
+            self.setPalette(palette)
+
         
-        # Create layout - back to using layouts instead of absolute positioning
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(20)
+    def init_ui(self):
+        """Initialize the user interface."""
+        layout = self.layout()
         
-        # Add title
+        # Add title with version
         title = QLabel("WWTS")
         title.setAlignment(Qt.AlignCenter)
-        title.setStyleSheet("font-size: 20pt; font-weight: bold;")
+        title_font = QFont()
+        title_font.setPointSize(16)
+        title_font.setBold(True)
+        title.setFont(title_font)
         layout.addWidget(title)
         
+        # Add version info
+        version = QLabel("Version 1.0.0")
+        version.setAlignment(Qt.AlignCenter)
+        version_font = QFont()
+        version_font.setItalic(True)
+        version.setFont(version_font)
+        layout.addWidget(version)
+        
+        # Add vertical spacer
+        layout.addItem(QSpacerItem(20, 15, QSizePolicy.Minimum, QSizePolicy.Fixed))
+        
         # Add content text
-        content = QLabel("Made for my own shitty memories, shared freely for yours.\nYou can always donate to my dumbass though or buy my shitty literature.")
+        content = QLabel(
+            "Made for my own shitty memories, shared freely for yours.\n"
+            "You can always donate to my dumbass though or buy my shitty literature."
+        )
         content.setAlignment(Qt.AlignCenter)
         content.setWordWrap(True)
+        content.setTextInteractionFlags(Qt.TextSelectableByMouse)
         layout.addWidget(content)
         
-        # Create buttons with layout
-        button_layout = QHBoxLayout()
-        button_layout.setSpacing(50)
-        button_layout.addStretch(1)
+        # Add vertical spacer
+        layout.addItem(QSpacerItem(20, 15, QSizePolicy.Minimum, QSizePolicy.Fixed))
+        
+        # Create buttons grid
+        buttons_grid = QGridLayout()
+        buttons_grid.setSpacing(10)
+        buttons_grid.setColumnStretch(0, 1)
+        buttons_grid.setColumnStretch(1, 1)
         
         # PayPal button
         paypal_button = QPushButton("PayPal")
-        paypal_button.setFixedSize(100, 40)
         paypal_button.setToolTip("Donate via PayPal")
-        paypal_button.clicked.connect(lambda: self.open_url("https://www.paypal.com/donate/?business=UBZJY8KHKKLGC&no_recurring=0&item_name=Why+are+you+doing+this?+Are+you+drunk?+&currency_code=USD"))
-        button_layout.addWidget(paypal_button)
+        paypal_button.clicked.connect(lambda: self.open_url(
+            "https://www.paypal.com/donate/?business=UBZJY8KHKKLGC&no_recurring=0&item_name=Why+are+you+doing+this?+Are+you+drunk?+&currency_code=USD"
+        ))
+        buttons_grid.addWidget(paypal_button, 0, 0)
         
         # Goodreads button
         goodreads_button = QPushButton("Goodreads")
-        goodreads_button.setFixedSize(100, 40)
         goodreads_button.setToolTip("Check out our book on Goodreads")
-        goodreads_button.clicked.connect(lambda: self.open_url("https://www.goodreads.com/book/show/25006763-usu"))
-        button_layout.addWidget(goodreads_button)
+        goodreads_button.clicked.connect(lambda: self.open_url(
+            "https://www.goodreads.com/book/show/25006763-usu"
+        ))
+        buttons_grid.addWidget(goodreads_button, 0, 1)
         
         # Amazon button
         amazon_button = QPushButton("Amazon")
-        amazon_button.setFixedSize(100, 40)
         amazon_button.setToolTip("Check out our book on Amazon")
-        amazon_button.clicked.connect(lambda: self.open_url("https://www.amazon.com/Usu-Jayde-Ver-Elst-ebook/dp/B00V8A5K7Y"))
-        button_layout.addWidget(amazon_button)
+        amazon_button.clicked.connect(lambda: self.open_url(
+            "https://www.amazon.com/Usu-Jayde-Ver-Elst-ebook/dp/B00V8A5K7Y"
+        ))
+        buttons_grid.addWidget(amazon_button, 1, 0)
         
         # GitHub button
         github_button = QPushButton("GitHub")
-        github_button.setFixedSize(100, 40)
         github_button.setToolTip("Visit Basjohn's GitHub page")
-        github_button.clicked.connect(lambda: self.open_url("https://github.com/Basjohn"))
-        button_layout.addWidget(github_button)
+        github_button.clicked.connect(lambda: self.open_url(
+            "https://github.com/Basjohn"
+        ))
+        buttons_grid.addWidget(github_button, 1, 1)
         
-        button_layout.addStretch(1)
-        layout.addLayout(button_layout)
+        layout.addLayout(buttons_grid)
         
-        # Add spacer
-        layout.addStretch(1)
-        
-        # Add OK button
+        # Add OK button at the bottom
         ok_button = QPushButton("OK")
-        ok_button.setFixedWidth(100)
+        ok_button.setFixedWidth(120)
         ok_button.clicked.connect(self.accept)
+        ok_button.setDefault(True)
         
         button_layout = QHBoxLayout()
         button_layout.addStretch()

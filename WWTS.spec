@@ -4,9 +4,9 @@
 a = Analysis(
     ['wwts.py'],
     pathex=[],
-    binaries=[],
+    binaries=[('resources/icons/WWTS.ico', '.')],
     datas=[('resources', 'resources')],
-    hiddenimports=['PIL', 'win32api', 'keyboard', 'pystray'],
+    hiddenimports=['PyQt5.QtCore', 'PyQt5.QtGui', 'PyQt5.QtWidgets', 'pystray._win32', 'keyboard', 'PIL'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

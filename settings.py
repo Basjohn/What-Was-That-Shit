@@ -25,10 +25,6 @@ class Settings:
         self.app_dir = get_application_path()
         self.settings_file = os.path.join(self.app_dir, "settings.json")
         
-        # Create history folder
-        self.history_folder = os.path.join(self.app_dir, "History")
-        os.makedirs(self.history_folder, exist_ok=True)
-        
         self.default_settings = {
             "always_on_top": True,
             "clickthrough": False,
@@ -36,21 +32,29 @@ class Settings:
             "minimize_on_startup": False,
             "resize_image_to_fit": True,
             "save_history": False,
-            "opacity": 77,
-            "opacity_toggled": False,  # New setting to remember opacity toggle state
-            "theme": Theme.DARK.value,
+            "theme": "dark",
+            "opacity": 74,
+            "opacity_toggled": False,
             "monitor_print_screen": True,
             "monitor_ctrl_c": True,
             "double_shift_capture": True,
             "video_aware_capture": False,
-            "draw_capture_frame": False,
-            "capture_width": 720,
-            "capture_height": 480,
-            "overlay_width": 500,
-            "overlay_height": 500,
+            "draw_capture_frame": True,
+            "capture_width": 800,
+            "capture_height": 800,
+            "capture_frame_color": "#FF0000",  # Bright red for better visibility
+            "capture_frame_opacity": 255,      # Full opacity
+            "capture_frame_duration": 5000,    # 5 seconds for testing
+            "overlay_width": 694,
+            "overlay_height": 508,
             "overlay_x": 0,
             "overlay_y": 0,
-            "history_folder": self.history_folder
+            "overlay_visible": True,
+            "overlay_position_x": 0,
+            "overlay_position_y": 0,
+            "settings_window_x": 100,
+            "settings_window_y": 100,
+            "history_folder": ""
         }
         self.settings = self.load_settings()
         
@@ -58,20 +62,40 @@ class Settings:
         self.save_settings()
 
     def load_settings(self):
+        # Start with default settings
+        settings = self.default_settings.copy()
+        
+        # These are legacy settings that we want to ignore
+        legacy_settings = {
+            'resize_frame_to_image',
+            'last_snapped_to',
+            'scroll_wheel_resize',
+            'history_folder'  # We'll handle this separately
+        }
+        
         if os.path.exists(self.settings_file):
             try:
                 with open(self.settings_file, "r") as f:
-                    settings = json.load(f)
-                # Ensure all default settings are present
-                for key, value in self.default_settings.items():
-                    if key not in settings:
+                    user_settings = json.load(f)
+                
+                # Update defaults with user settings
+                for key, value in user_settings.items():
+                    if key in settings:
                         settings[key] = value
-                return settings
+                    elif key in legacy_settings:
+                        logging.debug(f"Ignoring legacy setting: {key}")
+                    else:
+                        logging.warning(f"Unknown setting: {key}")
+                        
             except (json.JSONDecodeError, IOError) as e:
                 logging.error(f"Error loading settings: {e}")
-                return self.default_settings.copy()
-        else:
-            return self.default_settings.copy()
+                # Continue with defaults on error
+        
+        # Ensure required settings exist
+        if 'capture_frame_duration' not in settings:
+            settings['capture_frame_duration'] = 1000  # ms
+            
+        return settings
 
     def save_settings(self):
         try:
@@ -96,3 +120,10 @@ class Settings:
     def update(self, settings_dict):
         self.settings.update(settings_dict)
         return self.save_settings()
+        
+    @property
+    def history_folder(self):
+        """Get the history folder path, creating it if it doesn't exist."""
+        history_dir = os.path.join(self.app_dir, "History")
+        os.makedirs(history_dir, exist_ok=True)
+        return history_dir

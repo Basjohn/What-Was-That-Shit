@@ -8,6 +8,7 @@ from PyQt5.QtCore import Qt, QStandardPaths, QTimer, QBuffer
 from PyQt5.QtGui import QIcon, QPixmap, QImage
 from PIL import Image, ImageGrab
 import io
+import psutil
 
 # Local modules
 from settings import Settings
@@ -52,10 +53,28 @@ class WWTSApp:
         self.app.setQuitOnLastWindowClosed(False)  # Allow app to run with no visible windows
         
         # Set application icon
+        self.app_icon = None
+        
+        # Try to load icon from file system (development)
         icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'resources', 'icons', 'WWTS.ico')
+        
+        # For PyInstaller bundle, check if we're running in a bundle
+        if getattr(sys, 'frozen', False):
+            # Running in a bundle
+            bundle_dir = sys._MEIPASS if hasattr(sys, '_MEIPASS') else os.path.dirname(sys.executable)
+            icon_path = os.path.join(bundle_dir, 'resources', 'icons', 'WWTS.ico')
+        
         if os.path.exists(icon_path):
-            self.app_icon = QIcon(icon_path)
-            self.app.setWindowIcon(self.app_icon)
+            try:
+                self.app_icon = QIcon(icon_path)
+                self.app.setWindowIcon(self.app_icon)
+            except Exception as e:
+                logging.error(f"Failed to load icon from {icon_path}: {e}")
+        
+        # Fallback to a blank icon if loading failed
+        if self.app_icon is None:
+            logging.warning("Using blank application icon")
+            self.app_icon = QIcon()
         
         # Initialize variables
         self.overlay = None
@@ -77,16 +96,25 @@ class WWTSApp:
         self.check_timer.start(500)  # Check every 500ms
         
     def setup_logger(self):
-        """Setup the application logger."""
+        """Setup the application logger with minimal verbosity for production."""
+        # Set root logger to only show errors and above
         logging.basicConfig(
-            level=logging.WARNING,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            level=logging.ERROR,
+            format='%(asctime)s - %(levelname)s - %(message)s',
             handlers=[
-                logging.FileHandler(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'wwts.log')),
-                logging.StreamHandler()
+                # Only log errors to file, no console output by default
+                logging.FileHandler(
+                    os.path.join(os.path.dirname(os.path.abspath(__file__)), 'wwts.log'),
+                    mode='w',  # Overwrite log file on each run
+                    encoding='utf-8'
+                )
             ]
         )
-        logging.warning("Logger initialized")
+        # Disable debug logging for PIL and other verbose libraries
+        logging.getLogger('PIL').setLevel(logging.WARNING)
+        logging.getLogger('PIL.PngImagePlugin').setLevel(logging.WARNING)
+        logging.getLogger('PIL.Image').setLevel(logging.WARNING)
+        logging.getLogger('PIL.TiffImagePlugin').setLevel(logging.WARNING)
     
     def _init_history_manager(self):
         """Initialize the history manager if save_history is enabled."""
@@ -101,7 +129,14 @@ class WWTSApp:
     
     def init_overlay(self):
         """Initialize the image overlay."""
+        from overlay import ImageOverlay
         self.overlay = ImageOverlay(self.settings)
+        self.overlay.setWindowTitle("What Was That Shit?!")
+        if hasattr(self, 'app_icon'):
+            self.overlay.setWindowIcon(self.app_icon)
+        
+        # Store a reference to this app instance in the overlay
+        self.overlay.app_instance = self
         
         # Connect overlay settings request signal
         self.overlay.settings_requested.connect(self.show_settings)
@@ -126,26 +161,51 @@ class WWTSApp:
     def init_monitoring(self):
         """Initialize clipboard monitoring."""
         try:
+            logging.info("Initializing clipboard monitoring...")
+            
             # Import the ClipboardMonitor class here to ensure any errors are caught
-            # Skip clipboard operations for direct captures entirely
-            # This prevents File Explorer crashes on double shift capture
-            # The image will still be displayed in the overlay
+            try:
+                from clipboard_monitor import ClipboardMonitor
+                logging.info("Successfully imported ClipboardMonitor")
+            except ImportError as ie:
+                logging.error(f"Failed to import ClipboardMonitor: {ie}")
+                raise
+                
+            # Create clipboard monitor if it doesn't exist
             if not self.clipboard_monitor:
-                self.clipboard_monitor = ClipboardMonitor(self.settings)
-                
-                # Connect signal
-                self.clipboard_monitor.new_image.connect(self.on_new_image)
-                
-                # Connect the direct capture signal
-                self.clipboard_monitor.image_captured.connect(self.on_direct_capture)
-                
-                # Don't start monitoring here - it will be started in the start() method
-                logging.info("Clipboard monitor initialized successfully")
+                logging.info("Creating ClipboardMonitor instance...")
+                try:
+                    self.clipboard_monitor = ClipboardMonitor(self.settings)
+                    logging.info("ClipboardMonitor instance created successfully")
+                    
+                    # Connect signals with error handling
+                    try:
+                        logging.info("Connecting new_image signal...")
+                        self.clipboard_monitor.new_image.connect(self.on_new_image)
+                        logging.info("Connected new_image signal")
+                        
+                        logging.info("Connecting image_captured signal...")
+                        self.clipboard_monitor.image_captured.connect(self.on_direct_capture)
+                        logging.info("Connected image_captured signal")
+                        
+                        logging.info("Clipboard monitor signals connected successfully")
+                    except Exception as sig_err:
+                        logging.error(f"Error connecting clipboard monitor signals: {sig_err}", exc_info=True)
+                        raise
+                        
+                except Exception as create_err:
+                    logging.error(f"Failed to create ClipboardMonitor: {create_err}", exc_info=True)
+                    self.clipboard_monitor = None
+                    raise
+            else:
+                logging.warning("Clipboard monitor already exists")
             
         except Exception as e:
-            logging.error(f"Error initializing clipboard monitoring: {e}")
+            logging.error(f"Error initializing clipboard monitoring: {e}", exc_info=True)
             # Explicitly set to None to make it clear it failed
             self.clipboard_monitor = None
+            # Re-raise to allow upper levels to handle the error
+            raise
     
     def connect_signals(self):
         """Connect signals to slots (unused - signals are connected where components are initialized)"""
@@ -163,14 +223,6 @@ class WWTSApp:
         else:
             logging.warning("Clipboard monitor was not initialized, some features may not work")
         
-        # Always show the overlay when the app starts
-        if self.overlay:
-            try:
-                self.overlay.show()
-                logging.info("Overlay shown at startup")
-            except Exception as e:
-                logging.error(f"Error showing overlay at startup: {e}")
-        
         # Show settings window if not starting minimized
         if not self.settings.get("minimize_on_startup", False):
             self.settings_window.show()
@@ -184,6 +236,12 @@ class WWTSApp:
                 QSystemTrayIcon.Information
             )
         
+        # Show the overlay on launch, even if it's empty
+        if not self.overlay.isVisible():
+            self.overlay.show()
+            self.overlay.raise_()
+            self.overlay.activateWindow()
+        
         # Start the application event loop
         return self.app.exec_()
     
@@ -193,16 +251,22 @@ class WWTSApp:
         pass
     
     def on_new_image(self, image):
-        """Handle new image from clipboard monitor"""
-        logging.warning("New clipboard image detected")
+        """Handle new image from clipboard monitor
         
-        # Check if we have a valid image
+        Args:
+            image: The image to display (with _force_refresh attribute)
+        """
         if not image:
-            logging.warning("Received empty image from clipboard monitor")
+            logging.warning("Received None image in on_new_image")
             return
+            
+        logging.info("Processing new clipboard image")
+        
+        # Get force refresh flag from image object (default to False if not set)
+        force = getattr(image, '_force_refresh', False)
         
         try:
-            # Save to history if enabled
+            # Save to history if enabled - always save even if auto-refresh is disabled
             if self.settings.get("save_history", False):
                 # Ensure history manager is initialized
                 if not self.history_manager:
@@ -215,70 +279,114 @@ class WWTSApp:
                         if isinstance(image, Image.Image):
                             file_type = image.format if image.format else 'PNG'
                             file_path = self.history_manager.save_image(image, file_type.lower())
-                            logging.warning(f"Image saved to history: {file_path}")
+                            logging.info(f"Image saved to history: {file_path}")
                         else:
                             logging.warning(f"Cannot save to history: received non-Image object: {type(image)}")
                     except Exception as save_error:
                         logging.error(f"Error saving image to history: {save_error}")
             
-            # Send to overlay - don't refresh if auto-refresh is disabled
-            if self.settings.get("auto_refresh", True) or not self.overlay.isVisible():
-                logging.warning("Setting new image to overlay")
+            # Only update the overlay if auto-refresh is enabled or we're forcing
+            if force or self.settings.get("auto_refresh", True):
+                logging.info("Updating overlay with new image")
                 
                 # Make sure we're on the main thread
                 self.app.processEvents()
                 
                 # Send image to overlay
-                self.overlay.set_image(image)
-        except Exception as e:
-            logging.error(f"Error handling clipboard image: {e}")
-    
-    def on_direct_capture(self, qimage):
-        """Handle direct image capture from double-shift."""
-        try:
-            if qimage and not qimage.isNull():
-                logging.warning("Received direct capture image")
-                
-                # Make sure we're on the main thread
-                self.app.processEvents()
-                
-                # NOTE: Clipboard operations are now handled in clipboard_monitor._emit_image_captured_signal
-                # to match the WWTSDRAW implementation which doesn't have COM issues
-                
-                # Save to history if enabled
-                if self.settings.get("save_history", False):
-                    # Ensure history manager is initialized
-                    if not self.history_manager:
-                        if not self._init_history_manager():
-                            logging.error("Failed to initialize history manager")
-                    
-                    if self.history_manager:
-                        try:
-                            # Convert QImage to PIL Image for saving
-                            buffer = QBuffer()
-                            buffer.open(QBuffer.ReadWrite)
-                            qimage.save(buffer, "PNG")
-                            pil_image = Image.open(io.BytesIO(buffer.data()))
-                            pil_image.format = "PNG"
-                            
-                            # Save the image
-                            file_path = self.history_manager.save_image(pil_image, "png")
-                            logging.warning(f"Direct capture saved to history: {file_path}")
-                        except Exception as save_error:
-                            logging.error(f"Error saving direct capture to history: {save_error}")
-                
-                # Send QImage directly to overlay
-                self.overlay.set_qimage(qimage)
+                self.overlay.set_image(image, force=force)
                 
                 # Ensure overlay is visible
                 if not self.overlay.isVisible():
                     self.overlay.show()
                     self.overlay.raise_()
-                    
-                # No COM cleanup needed - we're using the same approach as WWTSDRAW
-                # which handles clipboard operations in the monitor class
+                    self.overlay.activateWindow()
+            else:
+                logging.info("Skipping overlay update: auto-refresh is disabled")
+                
         except Exception as e:
-            logging.error(f"Error handling direct capture: {e}")
+            logging.error(f"Error handling clipboard image: {e}", exc_info=True)
+    
+    def on_direct_capture(self, qimage, force=False):
+        """Handle direct image capture from double-shift."""
+        try:
+            logging.debug_logger.info("=== Starting Direct Capture Processing ===")
+            
+            if not qimage or qimage.isNull():
+                logging.debug_logger.error("Direct capture received null/empty QImage")
+                return
+
+            logging.debug_logger.info(f"QImage details:")
+            logging.debug_logger.info(f"- Size: {qimage.size()}")
+            logging.debug_logger.info(f"- Format: {qimage.format()}")
+            logging.debug_logger.info(f"- Depth: {qimage.depth()}")
+            logging.debug_logger.info(f"- Has alpha: {qimage.hasAlphaChannel()}")
+            logging.debug_logger.info(f"- Is null: {qimage.isNull()}")
+            
+            # Memory check before processing
+            process = psutil.Process(os.getpid())
+            mem_before = process.memory_info().rss / 1024 / 1024
+            logging.debug_logger.info(f"Memory before processing: {mem_before:.2f} MB")
+
+            # Check auto-refresh setting if not forcing
+            if not force and not self.settings.get("auto_refresh", True):
+                logging.info("Skipping direct capture: auto-refresh is disabled")
+                return
+
+            try:
+                # Convert QImage to PIL Image for saving
+                buffer = QBuffer()
+                buffer.open(QBuffer.ReadWrite)
+                if not qimage.save(buffer, "PNG"):
+                    logging.debug_logger.error("Failed to save QImage to buffer")
+                    return
+                buffer_data = buffer.data()
+                logging.debug_logger.info(f"Buffer size: {len(buffer_data)} bytes")
+                
+                pil_image = Image.open(io.BytesIO(buffer_data))
+                logging.debug_logger.info(f"Converted to PIL Image:")
+                logging.debug_logger.info(f"- Size: {pil_image.size}")
+                logging.debug_logger.info(f"- Mode: {pil_image.mode}")
+                logging.debug_logger.info(f"- Format: {pil_image.format}")
+            except Exception as conv_error:
+                logging.debug_logger.error(f"Image conversion error: {conv_error}", exc_info=True)
+                return
+
+            # Save to history if enabled
+            if self.settings.get("save_history", False):
+                # Ensure history manager is initialized
+                if not self.history_manager:
+                    if not self._init_history_manager():
+                        logging.error("Failed to initialize history manager")
+                
+                if self.history_manager:
+                    try:
+                        pil_image.format = "PNG"
+                        file_path = self.history_manager.save_image(pil_image, "png")
+                        logging.info(f"Direct capture saved to history: {file_path}")
+                    except Exception as save_error:
+                        logging.error(f"Error saving direct capture to history: {save_error}")
+
+            # Before setting image to overlay
+            logging.debug_logger.info("Attempting to set image to overlay...")
+            self.overlay.set_qimage(qimage)
+            logging.debug_logger.info("Successfully set image to overlay")
+
+            # Ensure overlay is visible
+            if not self.overlay.isVisible():
+                self.overlay.show()
+                self.overlay.raise_()
+                self.overlay.activateWindow()
+
+            # Memory check after processing
+            mem_after = process.memory_info().rss / 1024 / 1024
+            logging.debug_logger.info(f"Memory after processing: {mem_after:.2f} MB")
+            logging.debug_logger.info(f"Memory delta: {mem_after - mem_before:.2f} MB")
+            logging.debug_logger.info("=== Direct Capture Processing Complete ===")
+
+        except Exception as e:
+            logging.debug_logger.error(f"Direct capture processing error: {str(e)}")
+            logging.debug_logger.error(f"Traceback:", exc_info=True)
+            return
     
     def on_settings_closed(self):
         """Handle settings updated from settings window"""
@@ -352,55 +460,195 @@ class WWTSApp:
                 QSystemTrayIcon.Information
             )
     
+    def force_check_clipboard(self):
+        """Force a clipboard check regardless of auto-refresh setting."""
+        logging.warning("force_check_clipboard called in WWTSApp")
+        logging.warning(f"clipboard_monitor: {self.clipboard_monitor}")
+        logging.warning(f"clipboard_monitor type: {type(self.clipboard_monitor) if self.clipboard_monitor else 'None'}")
+        
+        if self.clipboard_monitor:
+            logging.warning("Calling clipboard_monitor.force_check_clipboard")
+            try:
+                # Force the overlay to be visible before checking clipboard
+                if self.overlay:
+                    self.overlay.show()
+                    self.overlay.raise_()
+                    self.overlay.activateWindow()
+                
+                # Force a clipboard check
+                self.clipboard_monitor.force_check_clipboard()
+                logging.warning("Successfully called clipboard_monitor.force_check_clipboard")
+                
+                # Ensure the overlay is visible after the clipboard check
+                if self.overlay and not self.overlay.isVisible():
+                    self.overlay.show()
+                    self.overlay.raise_()
+                    self.overlay.activateWindow()
+                    
+            except Exception as e:
+                logging.error(f"Error in clipboard_monitor.force_check_clipboard: {e}", exc_info=True)
+        else:
+            logging.warning("clipboard_monitor is None")
+    
     def exit_app(self):
         """Exit the application"""
         logging.warning("Application exit requested")
         
-        # Stop clipboard monitoring
-        if self.clipboard_monitor:
-            logging.warning("Stopping clipboard monitor")
-            self.clipboard_monitor.stop()
-            self.clipboard_monitor = None
-        
-        # Hide windows
-        if self.overlay:
-            logging.warning("Closing overlay")
-            self.overlay.close()
-            self.overlay.deleteLater()
-            self.overlay = None
+        try:
+            # Stop clipboard monitoring
+            if self.clipboard_monitor:
+                logging.warning("Stopping clipboard monitor")
+                try:
+                    self.clipboard_monitor.stop()
+                except Exception as e:
+                    logging.error(f"Error stopping clipboard monitor: {e}")
+                self.clipboard_monitor = None
             
-        if self.settings_window:
-            logging.warning("Closing settings window")
-            self.settings_window.close()
-            self.settings_window.deleteLater()
-            self.settings_window = None
+            # Hide overlay
+            if self.overlay:
+                logging.warning("Closing overlay")
+                try:
+                    self.overlay.close()
+                    self.overlay.deleteLater()
+                except Exception as e:
+                    logging.error(f"Error closing overlay: {e}")
+                self.overlay = None
+                
+            # Close settings window if it exists and is visible
+            if self.settings_window:
+                logging.warning("Closing settings window")
+                try:
+                    if self.settings_window.isVisible():
+                        self.settings_window.close()
+                    self.settings_window.deleteLater()
+                except Exception as e:
+                    logging.error(f"Error closing settings window: {e}")
+                self.settings_window = None
+            
+            # Clean up system tray
+            if self.system_tray:
+                logging.warning("Cleaning up system tray")
+                try:
+                    self.system_tray.cleanup()
+                except Exception as e:
+                    logging.error(f"Error cleaning up system tray: {e}")
+                self.system_tray = None
+            
+            # Stop timer
+            if self.check_timer:
+                logging.warning("Stopping timer")
+                try:
+                    self.check_timer.stop()
+                    self.check_timer.timeout.disconnect()
+                except Exception as e:
+                    logging.error(f"Error stopping timer: {e}")
+                self.check_timer = None
+            
+            # Process any pending events
+            self.app.processEvents()
+            
+            # Exit application
+            logging.warning("Exiting application")
+            self.app.quit()
+            
+        except Exception as e:
+            logging.critical(f"Error during application exit: {e}", exc_info=True)
+            # Force exit if we get here
+
+def setup_excepthook():
+    """Setup a global exception hook to catch all unhandled exceptions."""
+    def handle_exception(exc_type, exc_value, exc_traceback):
+        """Handle unhandled exceptions by logging them and showing an error message."""
+        # Skip keyboard interrupt to allow normal interrupt handling
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+            return
+            
+        # Log the error to a file with minimal verbosity
+        error_msg = f"Unhandled exception: {exc_value}"
+        logging.error(error_msg)
         
-        # Clean up system tray
-        if self.system_tray:
-            logging.warning("Cleaning up system tray")
-            self.system_tray.cleanup()
-            self.system_tray = None
-        
-        # Stop timer
-        if self.check_timer:
-            logging.warning("Stopping timer")
-            self.check_timer.stop()
-            self.check_timer = None
-        
-        # Process any pending events
-        self.app.processEvents()
-        
-        # Exit application
-        logging.warning("Exiting application")
-        self.app.quit()
+        # Show a simple error message to user if possible
+        try:
+            app = QApplication.instance()
+            if app is not None:
+                msg = QMessageBox()
+                msg.setIcon(QMessageBox.Critical)
+                msg.setWindowTitle("Application Error")
+                msg.setText("An unexpected error occurred. The application may become unstable.")
+                msg.setInformativeText(str(exc_value))
+                msg.setStandardButtons(QMessageBox.Ok)
+                msg.exec_()
+        except Exception:
+            pass  # If we can't show the error, just continue
+    
+    # Set the exception handler
+    sys.excepthook = handle_exception
 
 if __name__ == "__main__":
+    import time
+    import traceback
+    
+    # Set up global exception handling
+    setup_excepthook()
+    
     try:
+        # Create logs directory
+        log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+        os.makedirs(log_dir, exist_ok=True)
+        
+        # Create two separate loggers
+        main_logger = logging.getLogger('main')
+        debug_logger = logging.getLogger('debug')
+        
+        # Configure main logger (warnings and above)
+        main_logger.setLevel(logging.WARNING)
+        main_handler = logging.FileHandler(os.path.join(log_dir, 'wwts.log'))
+        main_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+        main_logger.addHandler(main_handler)
+        
+        # Configure debug logger (all levels)
+        debug_logger.setLevel(logging.DEBUG)
+        debug_handler = logging.FileHandler(os.path.join(log_dir, 'wwts_debug.log'))
+        debug_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+        debug_logger.addHandler(debug_handler)
+        
+        # Add console handler for immediate feedback
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(logging.Formatter('%(levelname)s - %(message)s'))
+        debug_logger.addHandler(console_handler)
+        
+        # Set the loggers as module-level variables
+        logging.main_logger = main_logger
+        logging.debug_logger = debug_logger
+        
+        # Initial logging
+        main_logger.warning("=== Application Starting ===")
+        debug_logger.info("=== Debug Log Initialized ===")
+        
+        logging.debug_logger.info(f"Python version: {sys.version}")
+        logging.debug_logger.info(f"Working directory: {os.getcwd()}")
+        logging.debug_logger.info(f"Script directory: {os.path.dirname(os.path.abspath(__file__))}")
+        
+        # Log environment variables that might affect the application
+        logging.debug_logger.debug("Environment variables:")
+        for var in ['PATH', 'PYTHONPATH', 'QT_DEBUG_PLUGINS']:
+            logging.debug_logger.debug(f"  {var} = {os.environ.get(var, 'Not set')}")
+        
+        # Create and start the application
+        logging.debug_logger.info("Creating WWTSApp instance...")
         app = WWTSApp()
+        logging.debug_logger.info("Starting application...")
         exit_code = app.start()
-        logging.info(f"Application exiting with code: {exit_code}")
+        logging.debug_logger.info(f"Application exited with code {exit_code}")
         sys.exit(exit_code)
+        
     except Exception as e:
-        logging.critical(f"Unhandled exception in main thread: {e}")
-        logging.critical(traceback.format_exc())
+        logging.main_logger.critical(f"Fatal error during application startup: {e}", exc_info=True)
+        # Try to log the full traceback to file
+        try:
+            with open('wwts_startup_error.log', 'w') as f:
+                traceback.print_exc(file=f)
+        except Exception as log_err:
+            print(f"Failed to write startup error log: {log_err}")
         sys.exit(1)
