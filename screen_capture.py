@@ -129,43 +129,55 @@ class ScreenCapture(QObject):
     def capture_around_cursor(self):
         try:
             # Get cursor position and screen info
-            cursor_pos = QCursor.pos()  # logical coords
+            cursor_pos = QCursor.pos()  # logical coords in virtual desktop space
             screen = QApplication.screenAt(cursor_pos) or QApplication.primaryScreen()
             dpr = screen.devicePixelRatio() or 1.0
-            screen_geometry = screen.geometry()
+            screen_geometry = screen.geometry()  # screen geometry in virtual desktop space
+            
+            logging.debug(f"Cursor at: {cursor_pos}, Screen geometry: {screen_geometry}")
             
             # Get capture dimensions from settings
             capture_width = self.settings.get('capture_width', 720)
             capture_height = self.settings.get('capture_height', 480)
             
-            # Calculate capture rectangle centered on cursor (logical coords)
-            x = max(0, cursor_pos.x() - capture_width // 2)
-            y = max(0, cursor_pos.y() - capture_height // 2)
+            # Calculate capture rectangle centered on cursor (in virtual desktop coords)
+            x = cursor_pos.x() - capture_width // 2
+            y = cursor_pos.y() - capture_height // 2
             
             # Ensure the capture rectangle stays within screen bounds
-            if x + capture_width > screen_geometry.width():
-                x = screen_geometry.width() - capture_width
-            if y + capture_height > screen_geometry.height():
-                y = screen_geometry.height() - capture_height
-                
-            # Ensure x and y are not negative
-            x = max(0, x)
-            y = max(0, y)
+            x = max(screen_geometry.left(), x)
+            y = max(screen_geometry.top(), y)
             
-            # Create logical rect for the frame
+            # Adjust if the capture area would go beyond the right/bottom of the screen
+            if x + capture_width > screen_geometry.right():
+                x = screen_geometry.right() - capture_width
+            if y + capture_height > screen_geometry.bottom():
+                y = screen_geometry.bottom() - capture_height
+                
+            # Ensure x and y are within screen bounds
+            x = max(screen_geometry.left(), x)
+            y = max(screen_geometry.top(), y)
+            
+            # Create logical rect for the frame (in virtual desktop coords)
             logical_rect = QRect(x, y, capture_width, capture_height)
             
             # Show the capture frame if enabled
             if self.settings.get('draw_capture_frame', True):
                 self._flash_frame(logical_rect)
             
-            # Calculate physical coordinates for capture
-            phys_x = int(x * dpr)
-            phys_y = int(y * dpr)
+            # Calculate physical coordinates for capture (relative to the screen)
+            screen_relative_x = x - screen_geometry.left()
+            screen_relative_y = y - screen_geometry.top()
+            
+            phys_x = int(screen_relative_x * dpr)
+            phys_y = int(screen_relative_y * dpr)
             phys_width = int(capture_width * dpr)
             phys_height = int(capture_height * dpr)
             
-            # Capture the screen (using physical coordinates)
+            logging.debug(f"Capturing at screen-relative: {screen_relative_x},{screen_relative_y} "
+                        f"size: {capture_width}x{capture_height} (physical: {phys_x},{phys_y} {phys_width}x{phys_height})")
+            
+            # Capture the screen (using physical coordinates relative to the screen)
             pixmap = screen.grabWindow(0, phys_x, phys_y, phys_width, phys_height)
             
             # Convert to QImage and return

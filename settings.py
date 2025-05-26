@@ -25,6 +25,9 @@ class Settings:
         self.app_dir = get_application_path()
         self.settings_file = os.path.join(self.app_dir, "settings.json")
         
+        # Set default history folder relative to application directory
+        default_history_folder = os.path.join(self.app_dir, "History")
+        
         self.default_settings = {
             "always_on_top": True,
             "clickthrough": False,
@@ -54,8 +57,11 @@ class Settings:
             "overlay_position_y": 0,
             "settings_window_x": 100,
             "settings_window_y": 100,
-            "history_folder": ""
+            "sneaky_bitch_mode": False
         }
+        
+        # Ensure history folder exists
+        os.makedirs(default_history_folder, exist_ok=True)
         self.settings = self.load_settings()
         
         # Always save settings after loading to ensure the file exists

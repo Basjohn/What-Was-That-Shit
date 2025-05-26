@@ -302,10 +302,10 @@ class INPUT(ctypes.Structure):
 class ClipboardMonitor(QObject):
     """Monitors the clipboard for images and signals when one is found."""
     
-    # Signal emitted when an image is captured from the clipboard
-    new_image = pyqtSignal(object)  # Emit just the image object
+    # Define signals as class variables
+    new_image = pyqtSignal(object)
     image_captured = pyqtSignal(object)
-    capture_frame_signal = pyqtSignal(QRect, bool)  # Signal to create capture frame overlay
+    capture_frame_signal = pyqtSignal(QRect, bool)
     
     def __init__(self, settings):
         super().__init__()
@@ -315,10 +315,13 @@ class ClipboardMonitor(QObject):
         self.last_image_hash = None
         self.last_web_url = None
         self.last_data = None
+        self._keyboard_hook = None
+        self.shift_timer = None
+        self._cleanup_done = False
         
-        # Initialize clipboard
-        self.clipboard = QApplication.clipboard()
-        self.clipboard.dataChanged.connect(self._on_clipboard_changed)
+        # Initialize clipboard with proper cleanup
+        self.clipboard = None
+        self._init_clipboard()
         
         # Shift press tracking for double-shift feature
         self.shift_press_times = []
@@ -326,18 +329,37 @@ class ClipboardMonitor(QObject):
         self.shift_released = True  # Track if shift was released since last press
         
         # Initialize settings
-        self.settings = settings
         self.draw_capture_frame = self.settings.get('draw_capture_frame', False)
         self.capture_overlay = None
-        
-        # Connect the capture frame signal to the create_capture_overlay method
-        self.capture_frame_signal.connect(self.create_capture_overlay)
-        
-        self.setup_shift_monitoring()
         
         # Track clipboard content to avoid processing the same content multiple times
         self._last_clipboard_data = None
         self._last_clipboard_type = None
+        
+        # Initialize in a way that's safe for cleanup
+        self._initialized = False
+        try:
+            # Connect the capture frame signal to the create_capture_overlay method
+            self.capture_frame_signal.connect(self.create_capture_overlay)
+            
+            # Set up shift monitoring if enabled in settings
+            if self.settings.get('double_shift_capture', False):
+                self.setup_shift_monitoring()
+            
+            self._initialized = True
+            logging.info("ClipboardMonitor initialized successfully")
+        except Exception as e:
+            logging.error(f"Error initializing ClipboardMonitor: {e}", exc_info=True)
+            raise
+    
+    def _init_clipboard(self):
+        """Initialize clipboard with proper error handling."""
+        try:
+            self.clipboard = QApplication.clipboard()
+            if self.clipboard:
+                self.clipboard.dataChanged.connect(self._on_clipboard_changed)
+        except Exception as e:
+            logging.error(f"Failed to initialize clipboard: {e}", exc_info=True)
         
     def create_capture_overlay(self, rect, is_video=False):
         """Create a capture frame overlay at the specified rectangle.
@@ -489,6 +511,84 @@ class ClipboardMonitor(QObject):
         except Exception as e:
             logging.debug_logger.error(f"Clipboard check error: {e}", exc_info=True)
 
+            return
+    
+    def cleanup(self):
+        """Clean up resources and prevent memory leaks."""
+        if hasattr(self, '_cleanup_done') and self._cleanup_done:
+            return
+            
+        try:
+            # Stop any running operations
+            self.running = False
+            
+            # Clean up clipboard
+            if hasattr(self, 'clipboard') and self.clipboard:
+                try:
+                    self.clipboard.dataChanged.disconnect()
+                except Exception as e:
+                    logging.error(f"Error disconnecting clipboard signals: {e}", exc_info=True)
+                self.clipboard = None
+            
+            # Clean up keyboard hooks
+            if hasattr(self, '_keyboard_hook'):
+                try:
+                    keyboard.unhook(self._keyboard_hook)
+                except Exception as e:
+                    logging.error(f"Error cleaning up keyboard hook: {e}", exc_info=True)
+                self._keyboard_hook = None
+            
+            # Clean up screen capture
+            if hasattr(self, 'screen_capture'):
+                try:
+                    if hasattr(self.screen_capture, 'cleanup'):
+                        self.screen_capture.cleanup()
+                except Exception as e:
+                    logging.error(f"Error cleaning up screen capture: {e}", exc_info=True)
+                self.screen_capture = None
+            
+            # Clean up capture overlay
+            if hasattr(self, 'capture_overlay') and self.capture_overlay:
+                try:
+                    self.capture_overlay.close()
+                    self.capture_overlay.deleteLater()
+                except Exception as e:
+                    logging.error(f"Error cleaning up capture overlay: {e}", exc_info=True)
+                self.capture_overlay = None
+            
+            # Clean up timers
+            if hasattr(self, 'shift_timer') and self.shift_timer:
+                try:
+                    self.shift_timer.stop()
+                    self.shift_timer.deleteLater()
+                except Exception as e:
+                    logging.error(f"Error cleaning up shift timer: {e}", exc_info=True)
+                self.shift_timer = None
+            
+            # Clear signals
+            if hasattr(self, 'capture_frame_signal'):
+                try:
+                    self.capture_frame_signal.disconnect()
+                except Exception:
+                    pass
+            
+            # Clear other attributes
+            self._last_clipboard_data = None
+            self._last_clipboard_type = None
+            self.last_image_hash = None
+            self.last_web_url = None
+            self.last_data = None
+            
+            logging.info("Clipboard monitor cleaned up")
+            
+        except Exception as e:
+            logging.error(f"Error during cleanup: {e}", exc_info=True)
+        finally:
+            self._cleanup_done = True
+            # Force garbage collection
+            import gc
+            gc.collect()
+    
     def _is_image_file(self, file_path):
         """Check if file is an image based on extension"""
         image_extensions = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'}
@@ -496,44 +596,7 @@ class ClipboardMonitor(QObject):
     
     def __del__(self):
         """Ensure cleanup happens even if object is garbage collected"""
-        if not hasattr(self, '_cleanup_done') or not self._cleanup_done:
-            self.cleanup()
-            
-    def cleanup(self):
-        """Clean up resources"""
-        if not hasattr(self, '_cleanup_done') or self._cleanup_done:
-            return
-            
-        try:
-            # Clean up any existing overlay
-            if hasattr(self, 'capture_overlay') and self.capture_overlay:
-                try:
-                    self.capture_overlay.close()
-                    self.capture_overlay.deleteLater()
-                except Exception as e:
-                    logging.error(f"Error cleaning up capture overlay: {e}")
-            
-            # Clean up keyboard hooks
-            try:
-                if hasattr(self, '_keyboard_hook') and self._keyboard_hook:
-                    keyboard.unhook(self._keyboard_hook)
-            except Exception as e:
-                logging.error(f"Error cleaning up keyboard hook: {e}")
-                
-            # Clean up any timers
-            if hasattr(self, 'shift_timer') and self.shift_timer:
-                try:
-                    self.shift_timer.stop()
-                    self.shift_timer.deleteLater()
-                except Exception as e:
-                    logging.error(f"Error cleaning up shift timer: {e}")
-            
-            logging.info("Clipboard monitor cleaned up")
-            
-        except Exception as e:
-            logging.error(f"Error during cleanup: {e}")
-        finally:
-            self._cleanup_done = True
+        self.cleanup()
 
     def setup_shift_monitoring(self):
         """Set up keyboard monitoring for double Shift press."""
@@ -629,39 +692,79 @@ class ClipboardMonitor(QObject):
             logging.error(f"Error in shift release handler: {e}")
     
     def _handle_double_shift(self):
-        """Handle double-shift screen capture"""
+        """Handle double-shift screen capture with improved reliability and error handling"""
         try:
             logging.info("Double-shift detected, capturing screen")
             
             # Check if capture frame is enabled in settings
             draw_frame = self.settings.get('draw_capture_frame', True)
-            if draw_frame:
-                logging.info("Capture frame is enabled in settings")
-            else:
-                logging.info("Capture frame is disabled in settings")
+            logging.info(f"Capture frame is {'enabled' if draw_frame else 'disabled'} in settings")
             
-            # Get the screen capture
-            qimage = self.screen_capture.capture_around_cursor()
-            
-            if qimage and not qimage.isNull():
-                # Emit the captured image with force flag to ensure it's shown
-                qimage._force_refresh = True
-                self.image_captured.emit(qimage)
+            try:
+                # Get the screen capture
+                qimage = self.screen_capture.capture_around_cursor()
                 
-                # Show a brief notification
-                if hasattr(self, 'system_tray'):
-                    self.system_tray.showMessage(
-                        "Screen Captured",
-                        "Screenshot captured successfully!",
-                        QSystemTrayIcon.Information,
-                        2000
-                    )
+                if qimage and not qimage.isNull():
+                    # Add force refresh attribute to ensure the image is shown
+                    qimage._force_refresh = True
                     
-                # Log capture details
-                logging.info(f"Captured image: {qimage.width()}x{qimage.height()} pixels, "
-                            f"format: {qimage.format()}")
-            else:
-                logging.error("Failed to capture screen - returned None or invalid image")
+                    # Emit the captured image
+                    self.image_captured.emit(qimage)
+                    
+                    # Show a brief notification if system_tray is available
+                    try:
+                        if hasattr(self, 'system_tray') and self.system_tray is not None:
+                            self.system_tray.showMessage(
+                                "Screen Captured",
+                                "Screenshot captured successfully!",
+                                QSystemTrayIcon.Information,
+                                2000
+                            )
+                    except Exception as tray_error:
+                        logging.error(f"Error showing system tray message: {tray_error}")
+                    
+                    # Log successful capture
+                    logging.info(f"Captured image: {qimage.width()}x{qimage.height()} pixels, format: {qimage.format()}")
+                    
+                    # If there's a capture overlay, update it
+                    if draw_frame and hasattr(self, 'capture_overlay') and self.capture_overlay:
+                        try:
+                            # Get screen that contains the cursor
+                            cursor_pos = QGuiApplication.primaryScreen().cursor().pos()
+                            screen = QGuiApplication.screenAt(cursor_pos)
+                            if screen:
+                                # Create a small rectangle around the cursor
+                                rect = QRect(cursor_pos.x() - 50, cursor_pos.y() - 50, 100, 100)
+                                self.create_capture_overlay(rect, False)
+                        except Exception as e:
+                            logging.error(f"Error creating capture frame: {e}")
+                    
+                    return True
+                else:
+                    error_msg = "Screen capture returned None or invalid image"
+                    logging.error(error_msg)
+                    
+            except Exception as capture_error:
+                error_msg = f"Error during screen capture: {capture_error}"
+                logging.error(error_msg, exc_info=True)
+            
+            # Show error notification if system_tray is available
+            try:
+                if hasattr(self, 'system_tray') and self.system_tray is not None:
+                    self.system_tray.showMessage(
+                        "Capture Failed",
+                        "Failed to capture screen. Check logs for details.",
+                        QSystemTrayIcon.Critical,
+                        3000
+                    )
+            except Exception as notify_error:
+                logging.error(f"Error showing error notification: {notify_error}")
+            
+            return False
+            
+        except Exception as e:
+            logging.error(f"Unexpected error in _handle_double_shift: {e}", exc_info=True)
+            return False
                 
         except Exception as e:
             logging.error(f"Error in _handle_double_shift: {e}", exc_info=True)

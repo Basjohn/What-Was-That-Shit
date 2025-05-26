@@ -3,7 +3,7 @@ import os
 import logging
 import ctypes
 from pathlib import Path
-from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QSystemTrayIcon
+from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QSystemTrayIcon, QMessageBox
 from PyQt5.QtCore import Qt, QStandardPaths, QTimer, QBuffer
 from PyQt5.QtGui import QIcon, QPixmap, QImage
 from PIL import Image, ImageGrab
@@ -20,111 +20,136 @@ from history import HistoryManager
 
 class WWTSApp:
     def __init__(self):
-        # Make app DPI aware to ensure proper scaling
+        logging.info("Initializing WWTS application...")
+
         try:
-            # Enable Windows DPI awareness
+            logging.info("Setting up DPI awareness...")
             ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+            logging.info("DPI awareness set successfully")
         except Exception as e:
             logging.warning(f"Failed to set DPI awareness: {e}")
-        
-        # Setup logger
-        self.setup_logger()
-        
-        # Initialize settings
-        self.settings = Settings()
-        
-        # Ensure settings file exists
-        if not os.path.exists(self.settings.settings_file):
-            logging.warning("Settings file not found, creating with defaults")
-            self.settings.save_settings()
-        
-        # History folder will be created by the Settings class 
-        # and will always be at the executable's location
-        logging.warning(f"Using history folder: {self.settings.history_folder}")
-        
-        # Initialize history manager if needed
-        self.history_manager = None
-        self._init_history_manager()
-        
-        # Create QApplication instance
-        self.app = QApplication(sys.argv)
-        self.app.setApplicationName("What Was That Shit?!")
-        self.app.setOrganizationName("WWTS")
-        self.app.setQuitOnLastWindowClosed(False)  # Allow app to run with no visible windows
-        
-        # Set application icon
-        self.app_icon = None
-        
-        # Try to load icon from file system (development)
-        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'resources', 'icons', 'WWTS.ico')
-        
-        # For PyInstaller bundle, check if we're running in a bundle
-        if getattr(sys, 'frozen', False):
-            # Running in a bundle
-            bundle_dir = sys._MEIPASS if hasattr(sys, '_MEIPASS') else os.path.dirname(sys.executable)
-            icon_path = os.path.join(bundle_dir, 'resources', 'icons', 'WWTS.ico')
-        
-        if os.path.exists(icon_path):
-            try:
-                self.app_icon = QIcon(icon_path)
-                self.app.setWindowIcon(self.app_icon)
-            except Exception as e:
-                logging.error(f"Failed to load icon from {icon_path}: {e}")
-        
-        # Fallback to a blank icon if loading failed
-        if self.app_icon is None:
-            logging.warning("Using blank application icon")
-            self.app_icon = QIcon()
-        
-        # Initialize variables
-        self.overlay = None
-        self.settings_window = None
-        self.clipboard_monitor = None
-        self.system_tray = None
-        
-        # Initialize components
-        self.init_overlay()
-        self.init_settings_window()
-        self.init_systray()
-        
-        # Initialize clipboard monitor
-        self.init_monitoring()
-        
-        # Timer to check for overlay settings request
-        self.check_timer = QTimer()
-        self.check_timer.timeout.connect(self.check_overlay_settings_request)
-        self.check_timer.start(500)  # Check every 500ms
+            
+        try:
+            # Initialize the application components
+            self.app = QApplication(sys.argv)
+            self.app.setQuitOnLastWindowClosed(False)
+            
+            # Set up logging first
+            self.setup_logger()
+            
+            # Initialize settings
+            self.settings = Settings()
+            
+            # Initialize history folder path
+            self.history_folder = self.settings.history_folder
+            
+            # Initialize history manager
+            self.history_manager = None
+            if self.settings.get("save_history", False):
+                self._init_history_manager()
+            
+            # Initialize components
+            self.clipboard_monitor = None
+            self.check_timer = None
+            
+            # Set up icon
+            possible_icon_paths = [
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), 'resources', 'icons', 'WWTS.ico'),
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), 'WWTS.ico'),
+                'WWTS.ico'
+            ]
+            
+            self.app_icon = None
+            for path in possible_icon_paths:
+                if os.path.exists(path):
+                    self.app_icon = QIcon(path)
+                    break
+            
+            if not self.app_icon:
+                self.app_icon = self.app.style().standardIcon(self.app.style().SP_ComputerIcon)
+            
+            # Initialize components
+            self.init_overlay()
+            self.init_settings_window()
+            self.init_systray()
+            self.init_monitoring()
+            
+        except Exception as e:
+            logging.critical(f"Failed to initialize WWTS application: {e}", exc_info=True)
+            raise
+            
+    def toggle_setting(self, key, value):
+        """Update setting live and save instantly."""
+        self.settings[key] = value
+        self.settings.save_settings()
         
     def setup_logger(self):
-        """Setup the application logger with minimal verbosity for production."""
-        # Set root logger to only show errors and above
-        logging.basicConfig(
-            level=logging.ERROR,
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[
-                # Only log errors to file, no console output by default
-                logging.FileHandler(
-                    os.path.join(os.path.dirname(os.path.abspath(__file__)), 'wwts.log'),
-                    mode='w',  # Overwrite log file on each run
-                    encoding='utf-8'
-                )
-            ]
+        """Setup the application logger with appropriate verbosity."""
+        # Set up logging to both file and console
+        log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'wwts.log')
+        
+        # Clear existing handlers
+        for handler in logging.root.handlers[:]:
+            logging.root.removeHandler(handler)
+        
+        # Set up logging to file
+        file_handler = logging.FileHandler(
+            log_file,
+            mode='a',  # Append to log file
+            encoding='utf-8',
+            delay=True  # Open the file only when needed
         )
-        # Disable debug logging for PIL and other verbose libraries
-        logging.getLogger('PIL').setLevel(logging.WARNING)
-        logging.getLogger('PIL.PngImagePlugin').setLevel(logging.WARNING)
-        logging.getLogger('PIL.Image').setLevel(logging.WARNING)
-        logging.getLogger('PIL.TiffImagePlugin').setLevel(logging.WARNING)
+        file_handler.setLevel(logging.DEBUG)
+        
+        # Set up console logging
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
+        
+        # Create formatters and add them to the handlers
+        file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        console_formatter = logging.Formatter('%(levelname)s: %(message)s')
+        
+        file_handler.setFormatter(file_formatter)
+        console_handler.setFormatter(console_formatter)
+        
+        # Add handlers to the root logger
+        logging.basicConfig(
+            level=logging.DEBUG,
+            handlers=[file_handler, console_handler]
+        )
+        
+        # Set up module-specific log levels
+        log_levels = {
+            'PIL': logging.WARNING,
+            'PIL.PngImagePlugin': logging.ERROR,
+            'PIL.Image': logging.WARNING,
+            'PIL.TiffImagePlugin': logging.ERROR,
+            'PyQt5': logging.WARNING,
+            'matplotlib': logging.ERROR,
+            'clipboard_monitor': logging.DEBUG,
+            'screen_capture': logging.DEBUG,
+            'wwts': logging.DEBUG
+        }
+        
+        for name, level in log_levels.items():
+            logger = logging.getLogger(name)
+            logger.setLevel(level)
+            logger.propagate = True
+            
+        logging.info("Logger configured successfully")
+        logging.info(f"Log file: {os.path.abspath(log_file)}")
     
     def _init_history_manager(self):
         """Initialize the history manager if save_history is enabled."""
         if self.settings.get("save_history", False):
-            # Ensure the folder exists
-            os.makedirs(self.settings.history_folder, exist_ok=True)
-            
-            # Create the history manager
-            self.history_manager = HistoryManager(self.settings.history_folder)
-            return True
+            try:
+                # Create the history manager with the fixed history folder
+                self.history_manager = HistoryManager(self.history_folder)
+                logging.info(f"History manager initialized with folder: {self.history_folder}")
+                return True
+            except Exception as e:
+                logging.error(f"Failed to initialize history manager: {e}")
+                return False
         return False
     
     def init_overlay(self):
@@ -141,6 +166,10 @@ class WWTSApp:
         # Connect overlay settings request signal
         self.overlay.settings_requested.connect(self.show_settings)
         
+        # Hide the overlay if in sneaky bitch mode
+        if self.settings.get("sneaky_bitch_mode", False):
+            self.overlay.hide()
+        
     def init_settings_window(self):
         """Initialize the settings window."""
         self.settings_window = SettingsWindow(self.settings, self.overlay)
@@ -149,8 +178,28 @@ class WWTSApp:
     
     def init_systray(self):
         """Initialize the system tray."""
-        tray_icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'resources', 'icons', 'WWTS.ico')
-        self.system_tray = SystemTrayManager(tray_icon_path if os.path.exists(tray_icon_path) else None)
+        # Try multiple possible locations for the icon
+        possible_icon_paths = [
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), 'resources', 'icons', 'WWTS.ico'),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), 'WWTS.ico'),
+            'WWTS.ico'
+        ]
+        
+        # Find the first valid icon path
+        tray_icon_path = None
+        for path in possible_icon_paths:
+            if os.path.exists(path):
+                tray_icon_path = path
+                logging.info(f"Found icon at: {tray_icon_path}")
+                break
+                
+        if tray_icon_path is None:
+            logging.warning("Could not find icon file in any of the expected locations")
+            logging.warning(f"Searched in: {possible_icon_paths}")
+        else:
+            logging.info(f"Using icon from: {tray_icon_path}")
+            
+        self.system_tray = SystemTrayManager(tray_icon_path)
         
         # Connect system tray signals
         self.system_tray.settings_requested.connect(self.show_settings)
@@ -176,6 +225,7 @@ class WWTSApp:
                 logging.info("Creating ClipboardMonitor instance...")
                 try:
                     self.clipboard_monitor = ClipboardMonitor(self.settings)
+                    self.clipboard_monitor.system_tray = self.system_tray
                     logging.info("ClipboardMonitor instance created successfully")
                     
                     # Connect signals with error handling
@@ -291,20 +341,31 @@ class WWTSApp:
                 
                 # Make sure we're on the main thread
                 self.app.processEvents()
-                
-                # Send image to overlay
+                # Apply the new image to the overlay
                 self.overlay.set_image(image, force=force)
                 
-                # Ensure overlay is visible
-                if not self.overlay.isVisible():
-                    self.overlay.show()
-                    self.overlay.raise_()
-                    self.overlay.activateWindow()
-            else:
-                logging.info("Skipping overlay update: auto-refresh is disabled")
+                # Save to history if enabled
+                if self.settings.get("save_history", False) and self.history_manager:
+                    try:
+                        if hasattr(image, 'toImage'):
+                            self.history_manager.add_image(image)
+                    except Exception as e:
+                        logging.error(f"Error saving to history: {e}")
                 
+                # Update the overlay but respect sneaky bitch mode
+                if not self.settings.get("sneaky_bitch_mode", False):
+                    logging.info("Sneaky Bitch Mode: Off - Showing overlay for clipboard capture")
+                    if self.overlay.isHidden():
+                        self.overlay.show()
+                        self.overlay.raise_()
+                        self.overlay.activateWindow()
+                else:
+                    logging.info("Sneaky Bitch Mode: On - Keeping overlay hidden for clipboard capture")
+                    # Still update the overlay but ensure it's hidden
+                    if self.overlay.isVisible():
+                        self.overlay.hide()
         except Exception as e:
-            logging.error(f"Error handling clipboard image: {e}", exc_info=True)
+            logging.error(f"Error in on_new_image: {e}", exc_info=True)
     
     def on_direct_capture(self, qimage, force=False):
         """Handle direct image capture from double-shift."""
@@ -371,11 +432,18 @@ class WWTSApp:
             self.overlay.set_qimage(qimage)
             logging.debug_logger.info("Successfully set image to overlay")
 
-            # Ensure overlay is visible
-            if not self.overlay.isVisible():
-                self.overlay.show()
-                self.overlay.raise_()
-                self.overlay.activateWindow()
+            # Update the overlay with the new image but respect sneaky bitch mode
+            if not self.settings.get("sneaky_bitch_mode", False):
+                logging.info("Sneaky Bitch Mode: Off - Showing overlay after direct capture")
+                if not self.overlay.isVisible():
+                    self.overlay.show()
+                    self.overlay.raise_()
+                    self.overlay.activateWindow()
+            else:
+                logging.info("Sneaky Bitch Mode: On - Keeping overlay hidden after direct capture")
+                # Still update the overlay but ensure it's hidden
+                if self.overlay.isVisible():
+                    self.overlay.hide()
 
             # Memory check after processing
             mem_after = process.memory_info().rss / 1024 / 1024
@@ -445,6 +513,13 @@ class WWTSApp:
     def focus_overlay(self):
         """Bring overlay window to front"""
         if self.overlay:
+            # Disable sneaky bitch mode when focusing from system tray
+            if self.settings.get("sneaky_bitch_mode", False):
+                self.settings.set("sneaky_bitch_mode", False)
+                self.settings.save_settings()
+                if hasattr(self.overlay, 'sneaky_bitch_action'):
+                    self.overlay.sneaky_bitch_action.setChecked(False)
+            
             # Make sure the overlay is visible
             if not self.overlay.isVisible():
                 self.overlay.show()
@@ -491,69 +566,87 @@ class WWTSApp:
             logging.warning("clipboard_monitor is None")
     
     def exit_app(self):
-        """Exit the application"""
-        logging.warning("Application exit requested")
-        
+        """Exit the application and clean up all resources."""
         try:
-            # Stop clipboard monitoring
+            # Stop clipboard monitoring first to prevent new operations
             if self.clipboard_monitor:
-                logging.warning("Stopping clipboard monitor")
                 try:
                     self.clipboard_monitor.stop()
                 except Exception as e:
-                    logging.error(f"Error stopping clipboard monitor: {e}")
-                self.clipboard_monitor = None
+                    logging.error(f"Error stopping clipboard monitor: {e}", exc_info=True)
+                finally:
+                    self.clipboard_monitor = None
             
-            # Hide overlay
-            if self.overlay:
-                logging.warning("Closing overlay")
+            # Stop any timers to prevent callbacks during cleanup
+            if hasattr(self, 'check_timer') and self.check_timer:
                 try:
+                    self.check_timer.stop()
+                    self.check_timer.timeout.disconnect()
+                except Exception as e:
+                    logging.error(f"Error stopping timer: {e}", exc_info=True)
+                finally:
+                    self.check_timer = None
+            
+            # Clean up overlay
+            if hasattr(self, 'overlay') and self.overlay:
+                try:
+                    # Clean up any resources in the overlay
+                    if hasattr(self.overlay, 'cleanup_resources'):
+                        self.overlay.cleanup_resources()
                     self.overlay.close()
                     self.overlay.deleteLater()
                 except Exception as e:
-                    logging.error(f"Error closing overlay: {e}")
-                self.overlay = None
-                
-            # Close settings window if it exists and is visible
-            if self.settings_window:
-                logging.warning("Closing settings window")
+                    logging.error(f"Error closing overlay: {e}", exc_info=True)
+                finally:
+                    self.overlay = None
+            
+            # Clean up settings window
+            if hasattr(self, 'settings_window') and self.settings_window:
                 try:
                     if self.settings_window.isVisible():
                         self.settings_window.close()
                     self.settings_window.deleteLater()
                 except Exception as e:
-                    logging.error(f"Error closing settings window: {e}")
-                self.settings_window = None
+                    logging.error(f"Error closing settings window: {e}", exc_info=True)
+                finally:
+                    self.settings_window = None
             
             # Clean up system tray
-            if self.system_tray:
-                logging.warning("Cleaning up system tray")
+            if hasattr(self, 'system_tray') and self.system_tray:
                 try:
                     self.system_tray.cleanup()
                 except Exception as e:
-                    logging.error(f"Error cleaning up system tray: {e}")
-                self.system_tray = None
+                    logging.error(f"Error cleaning up system tray: {e}", exc_info=True)
+                finally:
+                    self.system_tray = None
             
-            # Stop timer
-            if self.check_timer:
-                logging.warning("Stopping timer")
+            # Clean up history manager
+            if hasattr(self, 'history_manager') and self.history_manager:
                 try:
-                    self.check_timer.stop()
-                    self.check_timer.timeout.disconnect()
+                    if hasattr(self.history_manager, 'cleanup'):
+                        self.history_manager.cleanup()
                 except Exception as e:
-                    logging.error(f"Error stopping timer: {e}")
-                self.check_timer = None
+                    logging.error(f"Error cleaning up history manager: {e}", exc_info=True)
+                finally:
+                    self.history_manager = None
             
-            # Process any pending events
-            self.app.processEvents()
+            # Process any pending events before quitting
+            QApplication.processEvents()
             
-            # Exit application
-            logging.warning("Exiting application")
-            self.app.quit()
+            # Remove any remaining references
+            if hasattr(self, 'app'):
+                self.app.processEvents()
+                self.app.quit()
+            
+            # Force garbage collection
+            import gc
+            gc.collect()
             
         except Exception as e:
-            logging.critical(f"Error during application exit: {e}", exc_info=True)
-            # Force exit if we get here
+            logging.critical(f"Critical error during application exit: {e}", exc_info=True)
+        finally:
+            # Ensure the application exits
+            os._exit(0) if hasattr(os, '_exit') else os._exit(0)
 
 def setup_excepthook():
     """Setup a global exception hook to catch all unhandled exceptions."""

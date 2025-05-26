@@ -326,17 +326,16 @@ class ImageOverlay(QWidget):
         """Update the context menu state based on current settings."""
         # This method is kept for future use if needed
         pass
-
+        
     def eventFilter(self, obj, event):
-        """Filter events to ensure wheel events are captured."""
-        if event.type() == QEvent.Wheel and obj is self:
-            # Only process wheel events if scroll wheel resize is enabled
-            if self.settings.get("scroll_wheel_resize", True):
-                # Handle the wheel event for zooming
-                self.wheelEvent(event)
-                # Return True to indicate that the event was handled
-                return True
-        # For other events, call the parent class handler
+        """Filter events to handle context menu hide events."""
+        # Handle context menu hide events
+        if obj == self.context_menu and event.type() == QEvent.Hide:
+            # Prevent the menu from being shown again until we're done
+            self._is_hiding = True
+            QTimer.singleShot(100, lambda: setattr(self, '_is_hiding', False))
+            
+        # Let the parent class handle other events
         return super().eventFilter(obj, event)
     
     def wheelEvent(self, event):
@@ -581,8 +580,8 @@ class ImageOverlay(QWidget):
             # Update the display
             self._update_image_display()
             
-            # Show the overlay if not visible
-            if not self.isVisible():
+            # Show the overlay if not visible and not in sneaky bitch mode
+            if not self.isVisible() and not self.settings.get("sneaky_bitch_mode", False):
                 # If we have a saved snap position, try to restore relative positioning
                 if hasattr(self, 'last_snapped_to') and self.last_snapped_to:
                     self._restore_snap_position()
@@ -593,6 +592,10 @@ class ImageOverlay(QWidget):
                 active_window = QApplication.activeWindow()
                 if active_window and active_window != self:
                     active_window.activateWindow()
+            elif self.settings.get("sneaky_bitch_mode", False):
+                # Ensure we're hidden if in sneaky bitch mode
+                if self.isVisible():
+                    self.hide()
 
         except Exception as e:
             logging.error(f"Error setting image in overlay: {e}", exc_info=True)
@@ -627,9 +630,10 @@ class ImageOverlay(QWidget):
                 # Apply the image to the display
                 self._update_image_display()
                 
-                # Show window if hidden
-                self.show()
-                self.raise_()
+                # Only show window if not in sneaky bitch mode
+                if not self.settings.get("sneaky_bitch_mode", False):
+                    self.show()
+                    self.raise_()
                 
                 # Force garbage collection to help with switching between image types
                 import gc
@@ -1964,6 +1968,23 @@ class ImageOverlay(QWidget):
         self.gif_control_action.setVisible(False)
         self.context_menu.addAction(self.gif_control_action)
         
+        # Add Hide menu with submenu
+        self.hide_menu = QMenu("Hide", self.context_menu)
+        
+        # Add Hide action
+        self.hide_action = QAction("Hide Overlay", self)
+        self.hide_action.triggered.connect(self._hide_overlay)
+        self.hide_menu.addAction(self.hide_action)
+        
+        # Add Sneaky Bitch Mode toggle
+        self.sneaky_bitch_action = QAction("Hide Like A Sneaky Bitch", self, checkable=True)
+        self.sneaky_bitch_action.triggered.connect(self._toggle_sneaky_bitch_mode)
+        self.hide_menu.addAction(self.sneaky_bitch_action)
+        
+        # Add the Hide menu to the main context menu
+        self.context_menu.addMenu(self.hide_menu)
+        self.context_menu.addSeparator()
+        
         # Add other common actions
         self.opacity_action = QAction("Toggle Full Opacity", self)
         self.opacity_action.triggered.connect(self._toggle_opacity)
@@ -2126,43 +2147,134 @@ class ImageOverlay(QWidget):
     
     def _show_context_menu(self, position):
         """Show the right-click context menu."""
-        # Update navigation state
-        can_go_prev = self.can_go_back()
-        can_go_next = self.can_go_forward()
+        try:
+            # Skip if we're in the middle of hiding
+            if getattr(self, '_is_hiding', False):
+                return
+                
+            # Update navigation state
+            can_go_prev = self.can_go_back()
+            can_go_next = self.can_go_forward()
+            
+            # Update previous button state
+            if hasattr(self, 'nav_prev_btn'):
+                self.nav_prev_btn.setEnabled(can_go_prev)
+                self.nav_prev_btn.setProperty("canNavigate", str(can_go_prev).lower())
+                self.nav_prev_btn.style().unpolish(self.nav_prev_btn)
+                self.nav_prev_btn.style().polish(self.nav_prev_btn)
+            
+            # Update next button state
+            if hasattr(self, 'nav_next_btn'):
+                self.nav_next_btn.setEnabled(can_go_next)
+                self.nav_next_btn.setProperty("canNavigate", str(can_go_next).lower())
+                self.nav_next_btn.style().unpolish(self.nav_next_btn)
+                self.nav_next_btn.style().polish(self.nav_next_btn)
+            
+            # Update navigation label if it exists
+            if hasattr(self, 'nav_label'):
+                self.nav_label.setText("NAVI")
+            
+            # Update menu items
+            if hasattr(self, 'open_folder_action'):
+                self.open_folder_action.setEnabled(bool(self.current_file_path and os.path.isfile(self.current_file_path)))
+            
+            # Update GIF control if needed
+            if hasattr(self, '_update_gif_control'):
+                self._update_gif_control()
+            
+            # Update opacity action text if it exists
+            if hasattr(self, 'opacity_action'):
+                self.opacity_action.setText("Toggle Full Opacity")
+            
+            # Update sneaky bitch mode checkbox state
+            if hasattr(self, 'sneaky_bitch_action'):
+                sneaky_mode = self.settings.get("sneaky_bitch_mode", False)
+                self.sneaky_bitch_action.setChecked(sneaky_mode)
+            
+            # Update styles
+            if hasattr(self, '_update_menu_style'):
+                self._update_menu_style()
+            
+            # Show the menu
+            if hasattr(self, 'context_menu'):
+                self.context_menu.popup(self.mapToGlobal(position))
+                
+        except Exception as e:
+            logging.error(f"Error in _show_context_menu: {e}", exc_info=True)
+    
+    def eventFilter(self, obj, event):
+        try:
+            if obj == self.context_menu and event.type() == QEvent.Hide:
+                # Set a flag to prevent the context menu from reopening
+                self._is_hiding = True
+                # Reset the flag after a short delay
+                QTimer.singleShot(100, lambda: setattr(self, '_is_hiding', False))
+        except Exception as e:
+            logging.error(f"Error in eventFilter: {e}", exc_info=True)
+        return super().eventFilter(obj, event)
+    
+    def _hide_overlay(self):
+        """Safely hide the overlay by closing the context menu first."""
+        try:
+            # Set the hiding flag
+            self._is_hiding = True
+            
+            # Close the context menu if it exists
+            if hasattr(self, 'context_menu') and self.context_menu:
+                self.context_menu.close()
+                QApplication.processEvents()
+            
+            # Hide the overlay
+            self.hide()
+            
+            # Clear any pending events
+            QApplication.processEvents()
+            
+        except Exception as e:
+            logging.error(f"Error in _hide_overlay: {e}", exc_info=True)
+        finally:
+            # Reset the flag after a short delay
+            QTimer.singleShot(100, lambda: setattr(self, '_is_hiding', False))
+    
+    def _toggle_sneaky_bitch_mode(self):
+        """Toggle the sneaky bitch mode setting and hide the overlay."""
+        try:
+            # Toggle the setting
+            current = self.settings.get("sneaky_bitch_mode", False)
+            new_value = not current
+            self.settings.set("sneaky_bitch_mode", new_value)
+            
+            # Hide the overlay
+            self._hide_overlay()
+            
+        except Exception as e:
+            logging.error(f"Error in _toggle_sneaky_bitch_mode: {e}", exc_info=True)
+        logging.info(f"Sneaky Bitch Mode {'enabled' if new_value else 'disabled'}")
         
-        # Update previous button state
-        self.nav_prev_btn.setEnabled(can_go_prev)
-        self.nav_prev_btn.setProperty("canNavigate", str(can_go_prev).lower())
-        self.nav_prev_btn.style().unpolish(self.nav_prev_btn)
-        self.nav_prev_btn.style().polish(self.nav_prev_btn)
+        # Update the context menu state
+        self._update_context_menu()
         
-        # Update next button state
-        self.nav_next_btn.setEnabled(can_go_next)
-        self.nav_next_btn.setProperty("canNavigate", str(can_go_next).lower())
-        self.nav_next_btn.style().unpolish(self.nav_next_btn)
-        self.nav_next_btn.style().polish(self.nav_next_btn)
+        # Hide the overlay when toggling on, but don't show when toggling off
+        if new_value:
+            self.hide()
+            QApplication.instance().processEvents()
         
-        # Force update the navigation label
-        self.nav_label.setText("NAVI")
-        
-        # Update menu items
-        self.open_folder_action.setEnabled(bool(self.current_file_path and os.path.isfile(self.current_file_path)))
-        
-        # Update GIF control if needed
-        self._update_gif_control()
-        
-        # Update opacity action text
-        self.opacity_action.setText("Toggle Full Opacity")
-        
-        # Update styles
-        self._update_menu_style()
-        
-        # Force a style update for the navigation widget
-        self.context_menu.style().unpolish(self.context_menu)
-        self.context_menu.style().polish(self.context_menu)
-        
-        # Show the menu
-        self.context_menu.exec_(self.mapToGlobal(position))
+        # Update the settings window if it's open
+        if hasattr(self, 'settings_window') and self.settings_window:
+            if hasattr(self.settings_window, 'sneaky_bitch_mode_checkbox'):
+                self.settings_window.sneaky_bitch_mode_checkbox.setChecked(new_value)
+                
+        # Prevent the context menu from reopening
+        if hasattr(self, 'context_menu') and self.context_menu:
+            # Reconnect the aboutToHide signal if needed
+            if not self.context_menu.receivers(self.context_menu.aboutToHide) > 0:
+                self.context_menu.aboutToHide.connect(self._on_context_menu_hidden)
+                
+    def _on_context_menu_hidden(self):
+        """Handle the context menu being hidden."""
+        # This method is called when the context menu is hidden
+        # We can use it to perform any cleanup if needed
+        pass
     
     def _exit_application(self):
         """Exit the application."""
@@ -2352,6 +2464,11 @@ class ImageOverlay(QWidget):
             self.setStyleSheet("background-color: #E0E0E0; border: 10px solid red;")
         else:
             self.setStyleSheet("background-color: #252525; border: 10px solid red;")
+        
+        # Update context menu state
+        if hasattr(self, 'sneaky_bitch_action'):
+            sneaky_mode = self.settings.get("sneaky_bitch_mode", False)
+            self.sneaky_bitch_action.setChecked(sneaky_mode)
         
         # Show window after changing flags
         self.show()

@@ -147,7 +147,7 @@ class SettingsWindow(BorderedDialog):
         # Use horizontal layout for the title bar
         title_layout = QHBoxLayout(title_bar)
         title_layout.setContentsMargins(20, 0, 15, 0)  # Added more left padding
-        title_layout.setSpacing(1)  # Reduced from 10 to 1 for tighter grouping
+        title_layout.setSpacing(8)  # Increased spacing between options for better readability
         
         # Title text - left aligned with moderate padding
         title_text = QLabel("What Was That Shit?!")
@@ -585,7 +585,7 @@ class SettingsWindow(BorderedDialog):
         group_box = QGroupBox("Monitoring")
         group_box.setStyleSheet(self._get_section_style())
         layout = QVBoxLayout()
-        layout.setSpacing(1)  # Reduced from 10 to 1 for tighter grouping
+        layout.setSpacing(8)  # Increased spacing between options for better readability
         layout.setContentsMargins(15, 15, 15, 15)
         
         # PrintScreen monitoring
@@ -656,11 +656,14 @@ class SettingsWindow(BorderedDialog):
         group_box = QGroupBox("Overlay")
         group_box.setStyleSheet(self._get_section_style())
         layout = QVBoxLayout()
-        layout.setSpacing(1)  # Reduced from 10 to 1 for tighter grouping
+        layout.setSpacing(8)  # Increased spacing between options for better readability
         layout.setContentsMargins(15, 15, 15, 15)
         
-        # Resize options
-        layout.addWidget(QLabel("Resize Options:"))
+        # Sneaky Bitch Mode option - Moved to top as requested
+        self.sneaky_bitch_mode_checkbox = QCheckBox("Sneaky Bitch Mode")
+        self.sneaky_bitch_mode_checkbox.setChecked(self.settings.get("sneaky_bitch_mode", False))
+        self.sneaky_bitch_mode_checkbox.setToolTip("When enabled, the overlay will stay minimized after image capture or refresh")
+        layout.addWidget(self.sneaky_bitch_mode_checkbox)
         
         # Resize image to fit window
         self.resize_image_checkbox = QCheckBox("Resize Image To Fit Window")
@@ -772,7 +775,7 @@ class SettingsWindow(BorderedDialog):
         group_box = QGroupBox("Theme")
         group_box.setStyleSheet(self._get_section_style())
         layout = QVBoxLayout()
-        layout.setSpacing(1)  # Reduced from 10 to 1 for tighter grouping
+        layout.setSpacing(8)  # Increased spacing between options for better readability
         layout.setContentsMargins(15, 15, 15, 15)
         
         # Theme Selection
@@ -805,7 +808,7 @@ class SettingsWindow(BorderedDialog):
         group_box = QGroupBox("History")
         group_box.setStyleSheet(self._get_section_style())
         layout = QVBoxLayout()
-        layout.setSpacing(1)  # Reduced from 10 to 1 for tighter grouping
+        layout.setSpacing(8)  # Increased spacing between options for better readability
         layout.setContentsMargins(15, 15, 15, 15)
         
         # Save to history checkbox
@@ -1407,6 +1410,8 @@ class SettingsWindow(BorderedDialog):
             self.double_shift_capture_checkbox.setChecked(self.settings.get("double_shift_capture", True))
             self.video_aware_capture_checkbox.setChecked(self.settings.get("video_aware_capture", False))
             self.draw_capture_frame_checkbox.setChecked(self.settings.get("draw_capture_frame", False))
+            if hasattr(self, 'sneaky_bitch_mode_checkbox'):
+                self.sneaky_bitch_mode_checkbox.setChecked(self.settings.get("sneaky_bitch_mode", False))
             self.clickthrough_checkbox.setChecked(self.settings.get("clickthrough", False))
             self.opacity_slider.setValue(self.settings.get("opacity", 77))
             self.update_opacity_label(self.opacity_slider.value())
@@ -1448,6 +1453,7 @@ class SettingsWindow(BorderedDialog):
             self.settings.set("double_shift_capture", self.double_shift_capture_checkbox.isChecked())
             self.settings.set("video_aware_capture", self.video_aware_capture_checkbox.isChecked())
             self.settings.set("draw_capture_frame", self.draw_capture_frame_checkbox.isChecked())
+            self.settings.set("sneaky_bitch_mode", self.sneaky_bitch_mode_checkbox.isChecked())
             self.settings.set("clickthrough", self.clickthrough_checkbox.isChecked())
             self.settings.set("opacity", self.opacity_slider.value())
             
@@ -1496,6 +1502,8 @@ class SettingsWindow(BorderedDialog):
             self.draw_capture_frame_checkbox.setChecked(True)  # Enable draw capture frame
         if hasattr(self, 'clickthrough_checkbox'):
             self.clickthrough_checkbox.setChecked(False)
+        if hasattr(self, 'sneaky_bitch_mode_checkbox'):
+            self.sneaky_bitch_mode_checkbox.setChecked(False)
         if hasattr(self, 'opacity_slider'):
             self.opacity_slider.setValue(77)
         # Set theme to Dark (index 0 is Dark, 1 is Light, 2 is Auto)
